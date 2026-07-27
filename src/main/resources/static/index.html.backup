@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>卖好车 · 智能汽车销售顾问</title>
+<style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+        --amber-1: #fef3e2;
+        --amber-2: #fde4c3;
+        --amber-3: #fccb8a;
+        --amber-4: #faaf50;
+        --amber-5: #f08c2e;
+        --amber-6: #e06c1f;
+        --cream: #fffbf5;
+        --warm-white: #fffdf9;
+        --text-primary: #3d2e1e;
+        --text-secondary: #8b7355;
+        --text-muted: #b8a088;
+        --card-bg: rgba(255,251,245,0.85);
+        --card-shadow: 0 2px 20px rgba(180,120,60,0.08);
+    }
+
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+        background: #fffbf5;
+        height: 100vh; display: flex; flex-direction: column;
+        position: relative;
+        overflow: hidden;
+    }
+
+    /* ===== 光标跟随光晕 ===== */
+    .cursor-glow {
+        position: fixed; pointer-events: none; z-index: 1;
+        width: 500px; height: 500px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(250,175,80,0.18) 0%, rgba(252,203,138,0.08) 35%, transparent 70%);
+        transform: translate(-50%, -50%);
+        transition: left 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94),
+                    top 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+
+    /* ===== 动态背景光晕（鼠标视差） ===== */
+    .bg-orb {
+        position: fixed;
+        border-radius: 50%;
+        filter: blur(120px);
+        opacity: 0.4;
+        pointer-events: none;
+        z-index: 0;
+        transition: transform 1.2s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+    .bg-orb.orb-1 {
+        width: 600px; height: 600px;
+        background: radial-gradient(circle, rgba(250,175,80,0.35) 0%, transparent 70%);
+        top: -200px; right: -150px;
+    }
+    .bg-orb.orb-2 {
+        width: 500px; height: 500px;
+        background: radial-gradient(circle, rgba(252,203,138,0.3) 0%, transparent 70%);
+        bottom: -180px; left: -120px;
+    }
+    .bg-orb.orb-3 {
+        width: 400px; height: 400px;
+        background: radial-gradient(circle, rgba(240,140,46,0.2) 0%, transparent 70%);
+        top: 40%; left: 50%;
+    }
+    .bg-orb.orb-4 {
+        width: 350px; height: 350px;
+        background: radial-gradient(circle, rgba(253,228,195,0.35) 0%, transparent 70%);
+        top: 10%; left: 5%;
+    }
+
+    /* ===== 网格纹理 ===== */
+    .grid-texture {
+        position: fixed; inset: 0; pointer-events: none; z-index: 0;
+        background-image:
+            linear-gradient(rgba(180,120,60,0.03) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(180,120,60,0.03) 1px, transparent 1px);
+        background-size: 60px 60px;
+    }
+
+    /* ===== 顶栏 ===== */
+    .topbar {
+        position: relative; z-index: 10;
+        background: rgba(255,253,249,0.8); backdrop-filter: blur(24px) saturate(1.2);
+        padding: 14px 28px;
+        border-bottom: 1px solid rgba(180,120,60,0.1);
+        display: flex; align-items: center; gap: 10px; flex-shrink: 0;
+    }
+    .topbar .logo {
+        width: 34px; height: 34px; border-radius: 10px;
+        background: linear-gradient(135deg, #f08c2e, #e06c1f);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 18px; box-shadow: 0 2px 8px rgba(240,140,46,0.25);
+    }
+    .topbar h1 {
+        font-size: 17px; color: var(--text-primary); font-weight: 650;
+        letter-spacing: -0.2px;
+    }
+    .topbar .subtitle {
+        font-size: 11px; color: var(--text-muted);
+        background: rgba(250,175,80,0.1);
+        padding: 3px 8px; border-radius: 10px;
+    }
+    .topbar .status {
+        margin-left: auto; display: flex; align-items: center; gap: 6px;
+        font-size: 12px; color: #5a9e6f;
+    }
+    .topbar .status .dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: #5a9e6f;
+        animation: pulse-dot 2.5s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(90,158,111,0.4); }
+        50% { opacity: 0.6; box-shadow: 0 0 0 8px rgba(90,158,111,0); }
+    }
+
+    /* ===== 聊天区 ===== */
+    .chat-area {
+        position: relative; z-index: 5;
+        flex: 1; overflow-y: auto; padding: 28px 24px;
+        display: flex; flex-direction: column; gap: 20px;
+    }
+    .chat-area::-webkit-scrollbar { width: 5px; }
+    .chat-area::-webkit-scrollbar-track { background: transparent; }
+    .chat-area::-webkit-scrollbar-thumb { background: rgba(180,120,60,0.15); border-radius: 10px; }
+    .chat-area::-webkit-scrollbar-thumb:hover { background: rgba(180,120,60,0.3); }
+
+    /* ===== 消息 ===== */
+    .msg {
+        display: flex; gap: 10px; max-width: 75%;
+        animation: msgIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes msgIn {
+        from { opacity: 0; transform: translateY(16px) scale(0.97); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+    .msg.assistant { align-self: flex-start; }
+
+    .msg .avatar {
+        width: 36px; height: 36px; border-radius: 12px; display: flex;
+        align-items: center; justify-content: center; font-size: 14px;
+        flex-shrink: 0; font-weight: 700;
+    }
+    .msg.user .avatar {
+        background: linear-gradient(135deg, #f08c2e, #faaf50);
+        color: #fff; box-shadow: 0 2px 8px rgba(240,140,46,0.3);
+    }
+    .msg.assistant .avatar {
+        background: linear-gradient(135deg, #fccb8a, #fde4c3);
+        color: #8b5e2f; box-shadow: 0 2px 8px rgba(200,140,80,0.2);
+    }
+
+    .msg .bubble {
+        padding: 12px 17px; border-radius: 18px;
+        font-size: 14.5px; line-height: 1.72;
+        white-space: pre-wrap; word-break: break-word;
+    }
+    .msg.user .bubble {
+        background: linear-gradient(135deg, #f08c2e 0%, #e06c1f 100%);
+        color: #fff; border-bottom-right-radius: 6px;
+        box-shadow: 0 3px 12px rgba(224,108,31,0.25);
+    }
+    .msg.assistant .bubble {
+        background: var(--card-bg); color: var(--text-primary);
+        border-bottom-left-radius: 6px;
+        box-shadow: var(--card-shadow);
+        border: 1px solid rgba(180,120,60,0.06);
+    }
+
+    .msg .bubble .highlight { color: #e06c1f; font-weight: 650; }
+
+    /* ===== 快捷问题 ===== */
+    .quick-questions {
+        position: relative; z-index: 5;
+        display: flex; flex-wrap: wrap; gap: 8px;
+        padding: 0 28px 10px;
+    }
+    .quick-questions .chip {
+        padding: 8px 16px; border-radius: 22px; font-size: 13px; cursor: pointer;
+        background: rgba(250,175,80,0.06); color: var(--text-secondary);
+        border: 1px solid rgba(200,140,80,0.12);
+        transition: all 0.2s ease;
+        user-select: none;
+    }
+    .quick-questions .chip:hover {
+        background: rgba(250,175,80,0.15);
+        border-color: rgba(240,140,46,0.3);
+        color: #e06c1f;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(200,140,80,0.1);
+    }
+
+    /* ===== 输入栏 ===== */
+    .input-bar {
+        position: relative; z-index: 10;
+        background: rgba(255,253,249,0.85); backdrop-filter: blur(24px) saturate(1.2);
+        padding: 14px 28px 18px;
+        border-top: 1px solid rgba(180,120,60,0.08);
+        display: flex; gap: 12px; align-items: flex-end; flex-shrink: 0;
+    }
+    .input-bar textarea {
+        flex: 1; padding: 13px 20px; border-radius: 20px;
+        border: 2px solid rgba(200,140,80,0.15);
+        background: rgba(255,251,245,0.7);
+        color: var(--text-primary); font-size: 15px; font-family: inherit;
+        resize: none; outline: none; line-height: 1.5;
+        min-height: 48px; height: 48px;
+        transition: all 0.25s ease;
+    }
+    .input-bar textarea::placeholder { color: var(--text-muted); }
+    .input-bar textarea:focus {
+        border-color: #faaf50;
+        box-shadow: 0 0 0 4px rgba(250,175,80,0.12);
+        background: rgba(255,255,255,0.95);
+    }
+    .input-bar button {
+        padding: 12px 28px; border: none; border-radius: 16px; cursor: pointer;
+        font-size: 15px; font-weight: 600;
+        background: linear-gradient(135deg, #f08c2e 0%, #e06c1f 100%);
+        color: #fff; white-space: nowrap; height: 48px;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 10px rgba(240,140,46,0.3);
+    }
+    .input-bar button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(240,140,46,0.4);
+    }
+    .input-bar button:active { transform: translateY(0) scale(0.98); }
+    .input-bar button:disabled {
+        opacity: 0.5; cursor: not-allowed;
+        transform: none; box-shadow: 0 2px 6px rgba(240,140,46,0.2);
+    }
+
+    /* ===== Loading 动画 ===== */
+    .typing-indicator { display: inline-flex; gap: 4px; padding: 5px 2px; }
+    .typing-indicator span {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: #d4a574;
+        animation: bounce 1.3s ease-in-out infinite;
+    }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.18s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes bounce {
+        0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+        30% { transform: translateY(-6px); opacity: 1; }
+    }
+
+    /* ===== 欢迎卡片 ===== */
+    .welcome-card {
+        align-self: center;
+        margin: 40px 0 20px;
+        padding: 32px 36px;
+        border-radius: 24px;
+        background: var(--card-bg);
+        box-shadow: var(--card-shadow);
+        border: 1px solid rgba(180,120,60,0.06);
+        text-align: center;
+        max-width: 480px;
+        animation: msgIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .welcome-card .icon-ring {
+        width: 56px; height: 56px; border-radius: 16px;
+        background: linear-gradient(135deg, #fef3e2, #fde4c3);
+        display: flex; align-items: center; justify-content: center;
+        font-size: 28px; margin: 0 auto 16px;
+        box-shadow: 0 4px 16px rgba(250,175,80,0.2);
+    }
+    .welcome-card h2 { font-size: 20px; color: var(--text-primary); margin-bottom: 6px; }
+    .welcome-card .brands { font-size: 13px; color: var(--text-muted); margin-bottom: 14px; line-height: 1.6; }
+    .welcome-card .features { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+    .welcome-card .feature-tag {
+        font-size: 12px; color: var(--text-secondary);
+        background: rgba(250,175,80,0.08);
+        padding: 4px 10px; border-radius: 12px;
+    }
+
+    @media (max-width: 640px) {
+        .msg { max-width: 88%; }
+        .input-bar { padding: 10px 14px 14px; }
+        .chat-area { padding: 18px 14px; gap: 16px; }
+        .quick-questions { padding: 0 14px 6px; }
+        .welcome-card { margin: 20px 0; padding: 24px 20px; }
+    }
+</style>
+</head>
+<body>
+
+<!-- 光标跟随光晕 -->
+<div class="cursor-glow" id="cursorGlow"></div>
+
+<!-- 动态光晕 -->
+<div class="bg-orb orb-1" id="orb1"></div>
+<div class="bg-orb orb-2" id="orb2"></div>
+<div class="bg-orb orb-3" id="orb3"></div>
+<div class="bg-orb orb-4" id="orb4"></div>
+<div class="grid-texture"></div>
+
+<!-- 顶栏 -->
+<div class="topbar">
+    <div class="logo">🚗</div>
+    <h1>卖好车</h1>
+    <span class="subtitle">AI 销售顾问</span>
+    <div class="status"><span class="dot"></span> 在线</div>
+</div>
+
+<!-- 聊天区 -->
+<div class="chat-area" id="chatArea">
+    <div class="welcome-card">
+        <div class="icon-ring">🤖</div>
+        <h2>你好，我是卖好车AI顾问</h2>
+        <div class="brands">
+            主营比亚迪 · 特斯拉 · 理想 · 小鹏 · 蔚来<br>问界 · 极氪 · 领克 等热门品牌
+        </div>
+        <div class="features">
+            <span class="feature-tag">🚙 车型咨询</span>
+            <span class="feature-tag">💰 价格查询</span>
+            <span class="feature-tag">📋 库存查询</span>
+            <span class="feature-tag">🏪 门店查询</span>
+        </div>
+    </div>
+</div>
+
+<!-- 快捷问题 -->
+<div class="quick-questions" id="quickQuestions">
+    <span class="chip" data-q="比亚迪宋PLUS DM-i怎么样？">🚙 比亚迪宋PLUS怎么样？</span>
+    <span class="chip" data-q="20万左右有什么好的新能源车推荐？">💰 20万新能源推荐</span>
+    <span class="chip" data-q="特斯拉Model Y现在什么价格？">⚡ 特斯拉Model Y价格</span>
+    <span class="chip" data-q="我想买一辆家用SUV，有什么推荐？">🏠 家用SUV推荐</span>
+    <span class="chip" data-q="你们门店在哪里？">📍 门店地址</span>
+</div>
+
+<!-- 输入栏 -->
+<div class="input-bar">
+    <textarea id="userInput" rows="2" placeholder="输入您的问题，例如：20万左右有什么推荐？"></textarea>
+    <button id="sendBtn" onclick="sendMessage()">发送</button>
+</div>
+
+<script>
+(function() {
+    'use strict';
+
+    // 页面加载时生成持久 userId，整段对话复用同一个 ID
+    var sessionUserId = 'web-user-' + Date.now();
+
+    var userInput = document.getElementById('userInput');
+    var sendBtn = document.getElementById('sendBtn');
+    var chatArea = document.getElementById('chatArea');
+    var welcomeCard = chatArea.querySelector('.welcome-card');
+
+    // 快捷问题
+    document.getElementById('quickQuestions').addEventListener('click', function(e) {
+        var chip = e.target.closest('.chip');
+        if (!chip) return;
+        userInput.value = chip.dataset.q;
+        sendMessage();
+    });
+
+    // Enter 发送
+    userInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // 自适应高度
+    userInput.addEventListener('input', function() {
+        this.style.height = '48px';
+        this.style.height = Math.max(48, Math.min(this.scrollHeight, 150)) + 'px';
+    });
+
+    function escapeHtml(str) {
+        if (!str) return '';
+        return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    }
+
+    function formatText(text) {
+        if (!text) return '';
+        var safe = escapeHtml(text);
+        safe = safe.replace(/(\d+\.?\d*万)/g, '<span class="highlight">$1</span>');
+        safe = safe.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+        return safe;
+    }
+
+    function addMessage(role, content) {
+        // 首次对话时移除欢迎卡片
+        if (welcomeCard) {
+            welcomeCard.style.transition = 'opacity 0.3s, transform 0.3s';
+            welcomeCard.style.opacity = '0';
+            welcomeCard.style.transform = 'scale(0.95)';
+            setTimeout(function() { if (welcomeCard) welcomeCard.remove(); }, 300);
+            welcomeCard = null;
+        }
+        var div = document.createElement('div');
+        div.className = 'msg ' + role;
+        var avatarText = role === 'user' ? '我' : 'AI';
+        div.innerHTML = '<div class="avatar">' + avatarText + '</div>'
+                      + '<div class="bubble">' + formatText(content) + '</div>';
+        chatArea.appendChild(div);
+        smoothScroll(div);
+    }
+
+    function addLoading() {
+        if (welcomeCard) {
+            welcomeCard.style.transition = 'opacity 0.3s, transform 0.3s';
+            welcomeCard.style.opacity = '0';
+            welcomeCard.style.transform = 'scale(0.95)';
+            setTimeout(function() { if (welcomeCard) welcomeCard.remove(); }, 300);
+            welcomeCard = null;
+        }
+        var div = document.createElement('div');
+        div.className = 'msg assistant';
+        div.id = 'loading-msg';
+        div.innerHTML = '<div class="avatar">AI</div>'
+                      + '<div class="bubble"><div class="typing-indicator">'
+                      + '<span></span><span></span><span></span></div></div>';
+        chatArea.appendChild(div);
+        smoothScroll(div);
+    }
+
+    function removeLoading() {
+        var el = document.getElementById('loading-msg');
+        if (el) el.remove();
+    }
+
+    function smoothScroll(el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+
+    window.sendMessage = function() {
+        var message = userInput.value.trim();
+        if (!message) return;
+
+        userInput.value = '';
+        userInput.style.height = '48px';
+
+        addMessage('user', message);
+        addLoading();
+
+        sendBtn.disabled = true;
+        sendBtn.textContent = '思考中...';
+
+        fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: message,
+                userId: sessionUserId,
+                userIp: '127.0.0.1'
+            })
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(result) {
+            removeLoading();
+            if (result.success) {
+                addMessage('assistant', result.data.reply);
+            } else {
+                addMessage('assistant', '抱歉，服务暂时不可用，请稍后再试。');
+            }
+            sendBtn.disabled = false;
+            sendBtn.textContent = '发送';
+            userInput.focus();
+        })
+        .catch(function(e) {
+            removeLoading();
+            addMessage('assistant', '网络异常，请检查服务是否启动。\n\n' + e.message);
+            sendBtn.disabled = false;
+            sendBtn.textContent = '发送';
+            userInput.focus();
+        });
+    };
+
+    // ===== 鼠标跟随动态效果 =====
+    var cursorGlow = document.getElementById('cursorGlow');
+    var orb1 = document.getElementById('orb1');
+    var orb2 = document.getElementById('orb2');
+    var orb3 = document.getElementById('orb3');
+    var orb4 = document.getElementById('orb4');
+    var mouseX = window.innerWidth / 2;
+    var mouseY = window.innerHeight / 2;
+    var currentX = mouseX;
+    var currentY = mouseY;
+
+    document.addEventListener('mousemove', function(e) {
+        mouseX = e.clientX;
+        mouseY = e.clientY;
+    });
+
+    // RAF 平滑插值：光标光晕追赶鼠标 + 光晕视差
+    function animate() {
+        currentX += (mouseX - currentX) * 0.08;
+        currentY += (mouseY - currentY) * 0.08;
+        cursorGlow.style.left = currentX + 'px';
+        cursorGlow.style.top = currentY + 'px';
+
+        var cx = mouseX / window.innerWidth - 0.5;
+        var cy = mouseY / window.innerHeight - 0.5;
+        orb1.style.transform = 'translate(' + (cx * 50) + 'px, ' + (cy * 50) + 'px)';
+        orb2.style.transform = 'translate(' + (cx * -35) + 'px, ' + (cy * -40) + 'px)';
+        orb3.style.transform = 'translate(' + (cx * -25) + 'px, ' + (cy * 30) + 'px)';
+        orb4.style.transform = 'translate(' + (cx * 20) + 'px, ' + (cy * -25) + 'px)';
+        requestAnimationFrame(animate);
+    }
+    animate();
+
+    userInput.focus();
+})();
+</script>
+</body>
+</html>
