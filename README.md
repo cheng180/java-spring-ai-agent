@@ -1,4 +1,4 @@
-# 卖好车 · 智能汽车销售客服 — 开发记录
+# 智能汽车销售客服 — 开发记录
 
 > Spring AI 2.0 + SQLite + DeepSeek，从 Dify 分支流程重构为 LLM 自主决策 Agent
 
