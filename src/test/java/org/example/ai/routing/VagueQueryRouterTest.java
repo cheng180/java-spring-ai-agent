@@ -150,7 +150,7 @@ class VagueQueryRouterTest {
     }
 
     @Test
-    @DisplayName("Step 2: 历史无匹配 + 门店有热度 → 热度引导")
+    @DisplayName("Step 2: 历史无匹配 + 门店有热度 → 注入 LLM 上下文（不走 bypass）")
     void storeHotReturnsGuide() {
         // Mock GeoLocator + StoreLocator 返回门店 1
         when(mockGeoLocator.locate(any()))
@@ -165,8 +165,11 @@ class VagueQueryRouterTest {
 
         MatchResult result = router.tryVagueMatch("再看看", "", "127.0.0.1");
         assertThat(result).isNotNull();
-        assertThat(result.needsConfirm()).isTrue();
-        assertThat(result.followUpText()).contains("宋PLUS DM-i").contains("Model Y").contains("卖得最好");
+        assertThat(result.type()).isEqualTo(MatchResult.MatchType.VAGUE);
+        // L3 Step2 改为注入 LLM 上下文，不再直接 bypass
+        assertThat(result.needsInference()).isTrue();
+        assertThat(result.needsConfirm()).isFalse();
+        assertThat(result.followUpText()).contains("宋PLUS DM-i").contains("Model Y").contains("热销");
     }
 
     @Test
@@ -241,14 +244,52 @@ class VagueQueryRouterTest {
         assertThat(result).isNull();
     }
 
-    // ---- 集成：route() 先 L1 再 L2 ----
+    // ---- 集成：route() 仅保留 L1 ----
 
     @Test
-    @DisplayName("route: L1 miss + L2 品牌命中 → BRAND")
-    void routeL1MissL2Brand() {
-        MatchResult result = router.route("比亚迪有什么车", "", "127.0.0.1");
-        if (result != null) {
-            assertThat(result.type()).isEqualTo(MatchResult.MatchType.BRAND);
-        }
+    @DisplayName("route: L1 miss → L2/L3 已回退，返回 null 走 RAG + LLM")
+    void routeL1MissReturnsNull() {
+        // L2（品牌匹配）已禁用，返回 null 让 RAG + LLM 处理
+        assertThat(router.route("比亚迪有什么车", "", "127.0.0.1")).isNull();
+        assertThat(router.route("推荐一款车", "", "127.0.0.1")).isNull();
+        assertThat(router.route("20万混动SUV推荐", "", "127.0.0.1")).isNull();
+    }
+
+    // ---- 门店/地址查询：返回 null 让 LLM 处理 ----
+
+    @Test
+    @DisplayName("门店地址查询 → route 返回 null（不进入 L1/L2/L3）")
+    void storeAddressQueryReturnsNull() {
+        assertThat(router.route("你们门店在哪里？", "", "127.0.0.1")).isNull();
+        assertThat(router.route("我想要线下试车要去哪里，地址给我一个，电话也给我一个", "", "127.0.0.1")).isNull();
+        assertThat(router.route("你们地址在哪", "", "127.0.0.1")).isNull();
+        assertThat(router.route("电话多少", "", "127.0.0.1")).isNull();
+        assertThat(router.route("怎么去你们店", "", "127.0.0.1")).isNull();
+        assertThat(router.route("营业时间是几点", "", "127.0.0.1")).isNull();
+        assertThat(router.route("我想预约试驾", "", "127.0.0.1")).isNull();
+        assertThat(router.route("到店看车", "", "127.0.0.1")).isNull();
+    }
+
+    @Test
+    @DisplayName("品牌+门店混合查询 → route 返回 null（门店意图优先）")
+    void brandWithLocationReturnsNull() {
+        // "比亚迪门店在哪里" 中有品牌关键词也有门店关键词 → 门店意图优先
+        assertThat(router.route("比亚迪门店在哪里", "", "127.0.0.1")).isNull();
+        assertThat(router.route("特斯拉的实体店在哪", "", "127.0.0.1")).isNull();
+    }
+
+    @Test
+    @DisplayName("门店查询 + 历史有车系 → route 返回 null（门店意图优先于历史）")
+    void locationWithHistoryReturnsNull() {
+        // 即使历史中有车系关键词，门店查询也应该优先返回 null
+        when(mockGeoLocator.locate(any()))
+                .thenReturn(new org.example.ai.location.GeoLocation(30.28, 120.02, "杭州"));
+        when(mockStoreLocator.findNearest(30.28, 120.02))
+                .thenReturn(new org.example.ai.location.StoreInfo(1, "杭州店", "S1", "addr", "110", "9-18", "杭州", 30.28, 120.02, true));
+        when(mockHotCarRepo.getHotCars(anyInt(), anyInt()))
+                .thenReturn(java.util.List.of(
+                        new org.example.ai.location.HotCar("Model Y", 25, 15)));
+
+        assertThat(router.route("地址在哪", "之前看过比亚迪宋PLUS", "127.0.0.1")).isNull();
     }
 }

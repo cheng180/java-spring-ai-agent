@@ -31,6 +31,16 @@ public class VagueQueryRouter {
     /** L1 父块相似度阈值：EntityResolver 命中后需通过此验证才算 EXACT */
     private static final double L1_CONFIDENCE = 0.7;
 
+    /**
+     * 门店/地址/联系方式查询关键词。
+     * 命中时表示用户意图是找门店而非咨询车系，应返回 null 让 LLM 调用 getStoreInfo() 工具处理。
+     */
+    private static final Set<String> LOCATION_QUERY_WORDS = Set.of(
+            "门店", "地址", "电话", "联系方式", "在哪里", "在哪", "怎么去", "怎么走",
+            "营业时间", "工作时间", "位置", "定位", "导航", "路线", "到店", "线下",
+            "试驾", "试车", "预约", "体验店", "展厅", "实体店"
+    );
+
     private final EntityResolver entityResolver;
     private final DynamicKeywordBuilder keywordBuilder;
     private final AskCountTracker askCountTracker;
@@ -53,28 +63,32 @@ public class VagueQueryRouter {
     }
 
     /**
-     * 路由入口。根据用户消息和对话历史决定匹配类型。
+     * 路由入口。根据用户消息决定匹配类型。
+     *
+     * 当前仅启用 L1（精确车系匹配）+ 门店查询检测。
+     * L2（品牌级匹配）和 L3（级联兜底）已回退——固定回答策略会劫持正常查询，
+     * 改为依赖 RAG 向量检索 + LLM 语义理解处理模糊/品牌级问题。
      *
      * @param userMessage 用户当前消息
-     * @param historyText 最近 N 轮对话文本（L3 Step 1 使用）
-     * @param userIp      客户端 IP（L3 Step 2 门店定位使用）
-     * @return MatchResult 或 null（无匹配，走现有检索回退路径）
+     * @param historyText 最近 N 轮对话文本（当前未使用）
+     * @param userIp      客户端 IP（当前仅门店查询检测使用）
+     * @return MatchResult 或 null（无匹配，走 RAG + LLM 回退路径）
      */
     public MatchResult route(String userMessage, String historyText, String userIp) {
         if (userMessage == null || userMessage.isBlank()) return null;
 
-        // L1：精确车系匹配
+        // ---- 门店/地址/试驾查询：不进入车系路由，返回 null 交给 LLM + getStoreInfo() 工具 ----
+        if (isLocationQuery(userMessage)) {
+            log.info("门店/地址查询检测，跳过路由交由 LLM 处理: {}", userMessage);
+            return null;
+        }
+
+        // L1：精确车系匹配（EntityResolver 命中 + 父块相似度验证）
         MatchResult l1 = tryExactMatch(userMessage);
         if (l1 != null) return l1;
 
-        // L2：品牌级匹配
-        MatchResult l2 = tryBrandMatch(userMessage);
-        if (l2 != null) return l2;
-
-        // L3：级联兜底（#15 ticket）
-        MatchResult l3 = tryVagueMatch(userMessage, historyText, userIp);
-        if (l3 != null) return l3;
-
+        // L2/L3 回退：品牌级匹配和级联兜底的固定回答策略已禁用。
+        // 模糊/品牌级问题走 RAG 向量检索 + LLM 语义理解路径，不再使用模板追问。
         return null;
     }
 
@@ -216,7 +230,7 @@ public class VagueQueryRouter {
             }
         }
 
-        // ---- Step 2：门店热度 top3 引导 ----
+        // ---- Step 2：门店热度 top3 引导（注入 LLM 上下文，不绕过检索） ----
         int storeId = resolveStoreId(userIp);
         if (storeId > 0) {
             List<HotCar> hot = hotCarRepo.getHotCars(storeId, 3);
@@ -225,11 +239,11 @@ public class VagueQueryRouter {
                         .map(HotCar::seriesName)
                         .limit(3).toList();
                 String followUp = String.format(
-                        "我们最近卖得最好的是%s，您想了解其中哪款？还是我帮您按预算推荐？",
+                        "门店最近热销车型：%s。如果用户预算或需求匹配可以优先推荐这些车型。",
                         String.join("、", names));
-                log.info("L3 Step2: 门店{}热度 top3={}", storeId, names);
+                log.info("L3 Step2: 门店{}热度 top3={}（注入 LLM 上下文）", storeId, names);
                 return new MatchResult(MatchResult.MatchType.VAGUE, null, null,
-                        names, true, false, followUp);
+                        names, false, true, followUp);
             }
         }
 
@@ -238,6 +252,15 @@ public class VagueQueryRouter {
         log.info("L3 Step3: 通用引导");
         return new MatchResult(MatchResult.MatchType.VAGUE, null, null, null,
                 false, true, followUp);
+    }
+
+    /** 检测用户消息是否为门店/地址/联系方式查询，命中时应返回 null 让 LLM 处理 */
+    private boolean isLocationQuery(String userMessage) {
+        String lower = userMessage.toLowerCase();
+        for (String kw : LOCATION_QUERY_WORDS) {
+            if (lower.contains(kw.toLowerCase())) return true;
+        }
+        return false;
     }
 
     /** 通过 IP 定位最近门店 ID，失败返回 -1 */
