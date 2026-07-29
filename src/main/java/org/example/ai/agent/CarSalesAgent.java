@@ -11,6 +11,7 @@ import org.example.ai.location.GeoLocator;
 import org.example.ai.location.StoreLocator;
 import org.example.ai.routing.MatchResult;
 import org.example.ai.routing.VagueQueryRouter;
+import org.example.ai.search.HybridRetriever;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -67,6 +68,7 @@ public class CarSalesAgent {
     private final GeoLocator geoLocator;
     private final StoreLocator storeLocator;
     private final VectorStore vectorStore;
+    private final HybridRetriever hybridRetriever;
 
     /** 通用汽车话题词（不含品牌/车系名——那一侧由 DynamicKeywordBuilder + EntityResolver 覆盖，#12 ticket） */
     private static final Set<String> CAR_TOPIC_WORDS = Set.of(
@@ -77,7 +79,14 @@ public class CarSalesAgent {
             "耗油", "续航", "配置", "性能", "空间",
             "门店", "地址", "电话", "在哪里", "在哪", "怎么去",
             "到店", "预约", "试驾车", "转人工", "销售",
-            "推荐", "预算", "家用", "代步", "通勤", "性价比"
+            "推荐", "预算", "家用", "代步", "通勤", "性价比",
+            // 汽车配置/特征词（防止"全景天窗""有没有混动版"等被判为闲聊）
+            "天窗", "全景", "真皮", "座椅", "加热", "通风", "气囊",
+            "雷达", "影像", "导航", "巡航", "自动泊车", "日行灯",
+            "排量", "油耗", "加速", "极速", "马力", "扭矩", "驱动",
+            "四驱", "两驱", "前驱", "后驱", "手动挡", "自动挡",
+            "跑车", "超跑", "敞篷", "越野", "皮卡", "旅行版",
+            "有没有", "有没有卖", "有没有现车", "能不能", "可不可以"
     );
 
     public CarSalesAgent(ChatModel chatModel, CarSalesTools tools, VectorStore vectorStore,
@@ -87,7 +96,8 @@ public class CarSalesAgent {
                          DynamicKeywordBuilder keywordBuilder,
                          VagueQueryRouter router,
                          GeoLocator geoLocator,
-                         StoreLocator storeLocator) {
+                         StoreLocator storeLocator,
+                         HybridRetriever hybridRetriever) {
         this.askCountTracker = askCountTracker;
         this.entityResolver = entityResolver;
         this.keywordBuilder = keywordBuilder;
@@ -95,6 +105,7 @@ public class CarSalesAgent {
         this.geoLocator = geoLocator;
         this.storeLocator = storeLocator;
         this.vectorStore = vectorStore;
+        this.hybridRetriever = hybridRetriever;
 
         ChatMemoryRepository repo = new InMemoryChatMemoryRepository();
         this.chatMemory = MessageWindowChatMemory.builder()
@@ -196,19 +207,14 @@ public class CarSalesAgent {
         Set<String> entitySeries = matchedSeries.stream()
                 .map(ResolvedEntity::seriesKey).collect(Collectors.toSet());
 
-        // ---- 阶段一：父块相似度召回，阈值提至 0.6（决策：非车系问题不硬套） ----
+        // ---- 阶段一：父块相似度召回（混合检索：BM25 + BGE-M3），阈值 0.6 ----
         Filter.Expression parentOnly = new FilterExpressionBuilder().and(
                 new FilterExpressionBuilder().eq("type", "车源"),
                 new FilterExpressionBuilder().eq("level", "parent")
         ).build();
 
-        List<Document> parentDocs = vectorStore.similaritySearch(
-                SearchRequest.builder()
-                        .query(userMessage)
-                        .topK(3)
-                        .similarityThreshold(SERIES_CONFIDENCE)
-                        .filterExpression(parentOnly)
-                        .build());
+        List<Document> parentDocs = hybridRetriever.search(
+                userMessage, 3, SERIES_CONFIDENCE, parentOnly);
 
         Set<String> hitSeries = new LinkedHashSet<>();
         for (Document p : parentDocs) {
@@ -223,22 +229,12 @@ public class CarSalesAgent {
                     new FilterExpressionBuilder().eq("type", "车源"),
                     new FilterExpressionBuilder().eq("level", "child")
             ).build();
-            List<Document> childDocs = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query(userMessage)
-                            .topK(RAG_TOPK)
-                            .similarityThreshold(RAG_THRESHOLD)
-                            .filterExpression(childOnly)
-                            .build());
+            List<Document> childDocs = hybridRetriever.search(
+                    userMessage, RAG_TOPK, RAG_THRESHOLD, childOnly);
 
             Filter.Expression nonCar = new FilterExpressionBuilder().ne("type", "车源").build();
-            List<Document> knowledgeDocs = vectorStore.similaritySearch(
-                    SearchRequest.builder()
-                            .query(userMessage)
-                            .topK(3)
-                            .similarityThreshold(RAG_THRESHOLD)
-                            .filterExpression(nonCar)
-                            .build());
+            List<Document> knowledgeDocs = hybridRetriever.search(
+                    userMessage, 3, RAG_THRESHOLD, nonCar);
 
             return buildContext(Collections.emptyList(), childDocs, knowledgeDocs);
         }
