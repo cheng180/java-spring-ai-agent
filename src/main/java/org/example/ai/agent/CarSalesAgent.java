@@ -153,7 +153,7 @@ public class CarSalesAgent {
 
             // VagueQueryRouter 路由（#13 ticket）
             String historyText = buildHistoryText(userId);
-            MatchResult route = router.route(userMessage, historyText);
+            MatchResult route = router.route(userMessage, historyText, userIp);
 
             if (route != null && route.needsConfirm()) {
                 // BRAND 或 VAGUE+确认 → 直接返回追问文本，不调 LLM
@@ -383,7 +383,7 @@ public class CarSalesAgent {
 
         // VagueQueryRouter 路由（#13 ticket）
         String historyText = buildHistoryText(userId);
-        MatchResult route = router.route(userMessage, historyText);
+        MatchResult route = router.route(userMessage, historyText, userIp);
 
         if (route != null && route.needsConfirm()) {
             return Flux.just(route.followUpText());

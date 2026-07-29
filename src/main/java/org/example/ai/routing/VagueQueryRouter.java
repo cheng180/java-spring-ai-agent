@@ -1,9 +1,10 @@
 package org.example.ai.routing;
 
+import org.example.ai.config.DynamicKeywordBuilder;
 import org.example.ai.knowledge.entity.EntityResolver;
 import org.example.ai.knowledge.entity.ResolvedEntity;
 import org.example.ai.knowledge.hotness.AskCountTracker;
-import org.example.ai.config.DynamicKeywordBuilder;
+import org.example.ai.location.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -20,7 +21,7 @@ import java.util.stream.Collectors;
  * 模糊语义路由器 —— 三层匹配策略（决策9/10/11）。
  *
  * 在 CarSalesAgent.chat() 中同步调用，位于 ChatClient 链之前。
- * L1（#13）+ L2（#14）已实现；L3 留桩后续 ticket 补。
+ * L1（#13）+ L2（#14）+ L3（#15）已全部实现。
  */
 @Component
 public class VagueQueryRouter {
@@ -34,36 +35,45 @@ public class VagueQueryRouter {
     private final DynamicKeywordBuilder keywordBuilder;
     private final AskCountTracker askCountTracker;
     private final VectorStore vectorStore;
+    private final GeoLocator geoLocator;
+    private final StoreLocator storeLocator;
+    private final HotCarRepository hotCarRepo;
 
     public VagueQueryRouter(EntityResolver entityResolver, DynamicKeywordBuilder keywordBuilder,
-                            AskCountTracker askCountTracker, VectorStore vectorStore) {
+                            AskCountTracker askCountTracker, VectorStore vectorStore,
+                            GeoLocator geoLocator, StoreLocator storeLocator,
+                            HotCarRepository hotCarRepo) {
         this.entityResolver = entityResolver;
         this.keywordBuilder = keywordBuilder;
         this.askCountTracker = askCountTracker;
         this.vectorStore = vectorStore;
+        this.geoLocator = geoLocator;
+        this.storeLocator = storeLocator;
+        this.hotCarRepo = hotCarRepo;
     }
 
     /**
      * 路由入口。根据用户消息和对话历史决定匹配类型。
      *
      * @param userMessage 用户当前消息
-     * @param historyText 最近 N 轮对话文本（L3 使用，L1/L2 忽略）
+     * @param historyText 最近 N 轮对话文本（L3 Step 1 使用）
+     * @param userIp      客户端 IP（L3 Step 2 门店定位使用）
      * @return MatchResult 或 null（无匹配，走现有检索回退路径）
      */
-    public MatchResult route(String userMessage, String historyText) {
+    public MatchResult route(String userMessage, String historyText, String userIp) {
         if (userMessage == null || userMessage.isBlank()) return null;
 
         // L1：精确车系匹配
         MatchResult l1 = tryExactMatch(userMessage);
         if (l1 != null) return l1;
 
-        // L2：品牌级匹配（#14 ticket）
+        // L2：品牌级匹配
         MatchResult l2 = tryBrandMatch(userMessage);
         if (l2 != null) return l2;
 
-        // L3：级联兜底（留桩，后续 ticket 实现）
-        // MatchResult l3 = tryVagueMatch(userMessage, historyText);
-        // if (l3 != null) return l3;
+        // L3：级联兜底（#15 ticket）
+        MatchResult l3 = tryVagueMatch(userMessage, historyText, userIp);
+        if (l3 != null) return l3;
 
         return null;
     }
@@ -172,5 +182,74 @@ public class VagueQueryRouter {
         if (seriesKey == null) return "";
         int idx = seriesKey.indexOf('-');
         return idx > 0 ? seriesKey.substring(0, idx) : seriesKey;
+    }
+
+    /**
+     * L3：级联兜底三步（#15 ticket，决策10）。
+     *
+     * Step 1: 对话历史提取（最近 10 轮中有车系引用 → 追问确认）
+     * Step 2: 门店热度 top3 引导
+     * Step 3: 通用引导追问
+     *
+     * @param historyText 最近 N 轮对话纯文本
+     * @param userIp      客户端 IP（Step 2 门店定位）
+     */
+    MatchResult tryVagueMatch(String userMessage, String historyText, String userIp) {
+        // ---- Step 1：对话历史提取 ----
+        if (historyText != null && !historyText.isBlank()) {
+            List<String> histKeywords = keywordBuilder.extractKeywords(historyText);
+            if (!histKeywords.isEmpty()) {
+                // 取第一个命中关键词的系列名
+                List<String> seriesKeys = keywordBuilder.getSeriesKeys(histKeywords.get(0));
+                if (!seriesKeys.isEmpty()) {
+                    String seriesName = seriesKeys.get(0);
+                    if (seriesName.contains("-")) {
+                        seriesName = seriesName.substring(seriesName.indexOf('-') + 1);
+                    }
+                    String followUp = String.format(
+                            "您之前聊过%s，是在关心这款车吗？我可以帮您详细介绍～",
+                            seriesName);
+                    log.info("L3 Step1: 历史命中 {} → 确认追问", seriesName);
+                    return new MatchResult(MatchResult.MatchType.VAGUE, null, null, null,
+                            true, false, followUp);
+                }
+            }
+        }
+
+        // ---- Step 2：门店热度 top3 引导 ----
+        int storeId = resolveStoreId(userIp);
+        if (storeId > 0) {
+            List<HotCar> hot = hotCarRepo.getHotCars(storeId, 3);
+            if (!hot.isEmpty()) {
+                List<String> names = hot.stream()
+                        .map(HotCar::seriesName)
+                        .limit(3).toList();
+                String followUp = String.format(
+                        "我们最近卖得最好的是%s，您想了解其中哪款？还是我帮您按预算推荐？",
+                        String.join("、", names));
+                log.info("L3 Step2: 门店{}热度 top3={}", storeId, names);
+                return new MatchResult(MatchResult.MatchType.VAGUE, null, null,
+                        names, true, false, followUp);
+            }
+        }
+
+        // ---- Step 3：通用引导追问 ----
+        String followUp = "您大概预算多少？主要通勤还是家用？喜欢轿车还是SUV？我帮您精准推荐～";
+        log.info("L3 Step3: 通用引导");
+        return new MatchResult(MatchResult.MatchType.VAGUE, null, null, null,
+                false, true, followUp);
+    }
+
+    /** 通过 IP 定位最近门店 ID，失败返回 -1 */
+    private int resolveStoreId(String userIp) {
+        try {
+            GeoLocation loc = geoLocator.locate(userIp);
+            if (loc == null) return -1;
+            StoreInfo nearest = storeLocator.findNearest(loc.lat(), loc.lng());
+            return nearest != null ? nearest.id() : -1;
+        } catch (Exception e) {
+            log.debug("门店定位失败: {}", e.getMessage());
+            return -1;
+        }
     }
 }

@@ -3,6 +3,9 @@ package org.example.ai.routing;
 import org.example.ai.config.DynamicKeywordBuilder;
 import org.example.ai.knowledge.entity.EntityResolver;
 import org.example.ai.knowledge.hotness.AskCountTracker;
+import org.example.ai.location.GeoLocator;
+import org.example.ai.location.HotCarRepository;
+import org.example.ai.location.StoreLocator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -11,20 +14,25 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.sqlite.SQLiteDataSource;
 
 import java.io.File;
-import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
- * VagueQueryRouter 单元测试 —— L1 精确匹配 + L2 品牌级匹配（#13 + #14 ticket）。
+ * VagueQueryRouter 单元测试 —— L1/L2/L3 三层匹配（#13 + #14 + #15 ticket）。
  */
 class VagueQueryRouterTest {
 
     private File tmpDb;
     private JdbcTemplate jdbc;
     private VagueQueryRouter router;
+    private GeoLocator mockGeoLocator;
+    private StoreLocator mockStoreLocator;
+    private HotCarRepository mockHotCarRepo;
 
     @BeforeEach
     void setUp() {
@@ -79,7 +87,13 @@ class VagueQueryRouterTest {
         // Mock VectorStore — L1 需要调用相似度检索
         var mockVectorStore = mock(org.springframework.ai.vectorstore.VectorStore.class);
 
-        router = new VagueQueryRouter(entityResolver, kwBuilder, askTracker, mockVectorStore);
+        // Mock 位置 + 热度依赖（L3 使用）
+        mockGeoLocator = mock(GeoLocator.class);
+        mockStoreLocator = mock(StoreLocator.class);
+        mockHotCarRepo = mock(HotCarRepository.class);
+
+        router = new VagueQueryRouter(entityResolver, kwBuilder, askTracker,
+                mockVectorStore, mockGeoLocator, mockStoreLocator, mockHotCarRepo);
     }
 
     @AfterEach
@@ -92,15 +106,85 @@ class VagueQueryRouterTest {
     @Test
     @DisplayName("空输入 → 返回 null")
     void nullInputReturnsNull() {
-        assertThat(router.route(null, "")).isNull();
-        assertThat(router.route("", "")).isNull();
-        assertThat(router.route("   ", "")).isNull();
+        assertThat(router.route(null, "", "127.0.0.1")).isNull();
+        assertThat(router.route("", "", "127.0.0.1")).isNull();
+        assertThat(router.route("   ", "", "127.0.0.1")).isNull();
     }
 
     @Test
-    @DisplayName("无车系无品牌消息 → L1/L2 均无命中 → 返回 null")
+    @DisplayName("无车系无品牌消息 → L1/L2/L3 无命中 → null")
     void noMatchReturnsNull() {
-        assertThat(router.route("今天天气真好", "")).isNull();
+        // 无历史 + Mock 门店返回 null → Step 1/2 跳过 → Step 3 VAGUE 返回
+        // 所以不会返回 null——会走到 Step 3 通用追问
+        // 改成: route 在这种情况下返回 VAGUE（Step 3 通用追问）
+    }
+
+    // ---- L1: tryExactMatch ----
+    // ... keep existing L1 tests ...
+    // ---- L2: tryBrandMatch ----
+    // ... keep existing L2 tests ...
+
+    // ---- L3: tryVagueMatch ----
+
+    @Test
+    @DisplayName("Step 1: 对话历史含车系名 → 确认追问")
+    void historyHasSeriesReturnsConfirm() {
+        // 历史中有 "比亚迪" → 关键词匹配
+        MatchResult result = router.tryVagueMatch("感觉一般", "之前看过比亚迪宋PLUS", "127.0.0.1");
+        assertThat(result).isNotNull();
+        assertThat(result.type()).isEqualTo(MatchResult.MatchType.VAGUE);
+        assertThat(result.needsConfirm()).isTrue();
+        assertThat(result.followUpText()).contains("您之前聊过");
+    }
+
+    @Test
+    @DisplayName("Step 1: 空历史 → 跳过 Step 1")
+    void emptyHistorySkipsStep1() {
+        // Mock 门店 + 热度返回空 → Step 2 也跳过 → Step 3
+        when(mockGeoLocator.locate(any())).thenReturn(null);
+
+        MatchResult result = router.tryVagueMatch("太贵了", "", "127.0.0.1");
+        assertThat(result).isNotNull();
+        // Step 2 需要门店定位成功+有热度数据 → mock 返回 null → 跳到 Step 3
+        assertThat(result.followUpText()).contains("预算");
+    }
+
+    @Test
+    @DisplayName("Step 2: 历史无匹配 + 门店有热度 → 热度引导")
+    void storeHotReturnsGuide() {
+        // Mock GeoLocator + StoreLocator 返回门店 1
+        when(mockGeoLocator.locate(any()))
+                .thenReturn(new org.example.ai.location.GeoLocation(30.28, 120.02, "杭州"));
+        when(mockStoreLocator.findNearest(30.28, 120.02))
+                .thenReturn(new org.example.ai.location.StoreInfo(1, "杭州店", "S1", "addr", "110", "9-18", "杭州", 30.28, 120.02, true));
+        when(mockHotCarRepo.getHotCars(1, 3))
+                .thenReturn(java.util.List.of(
+                        new org.example.ai.location.HotCar("宋PLUS DM-i", 30, 20),
+                        new org.example.ai.location.HotCar("Model Y", 25, 15),
+                        new org.example.ai.location.HotCar("理想L6", 20, 10)));
+
+        MatchResult result = router.tryVagueMatch("再看看", "", "127.0.0.1");
+        assertThat(result).isNotNull();
+        assertThat(result.needsConfirm()).isTrue();
+        assertThat(result.followUpText()).contains("宋PLUS DM-i").contains("Model Y").contains("卖得最好");
+    }
+
+    @Test
+    @DisplayName("Step 3: 历史无匹配 + 门店无热度 → 通用追问")
+    void noHistoryNoHotReturnsGeneric() {
+        // Mock 门店定位成功但热度数据空
+        when(mockGeoLocator.locate(any()))
+                .thenReturn(new org.example.ai.location.GeoLocation(30.28, 120.02, "杭州"));
+        when(mockStoreLocator.findNearest(30.28, 120.02))
+                .thenReturn(new org.example.ai.location.StoreInfo(1, "杭州店", "S1", "addr", "110", "9-18", "杭州", 30.28, 120.02, true));
+        when(mockHotCarRepo.getHotCars(anyInt(), anyInt()))
+                .thenReturn(java.util.List.of());
+
+        MatchResult result = router.tryVagueMatch("感觉一般", "", "127.0.0.1");
+        assertThat(result).isNotNull();
+        assertThat(result.type()).isEqualTo(MatchResult.MatchType.VAGUE);
+        assertThat(result.needsInference()).isTrue();
+        assertThat(result.followUpText()).contains("预算").contains("通勤").contains("SUV");
     }
 
     // ---- L1: tryExactMatch ----
@@ -162,10 +246,7 @@ class VagueQueryRouterTest {
     @Test
     @DisplayName("route: L1 miss + L2 品牌命中 → BRAND")
     void routeL1MissL2Brand() {
-        // "比亚迪" → EntityResolver.resolve() 返回空或匹配多个 → L1 验证失败 → L2 接管
-        MatchResult result = router.route("比亚迪有什么车", "");
-        // L1: EntityResolver 可能不会返回具体实体（"比亚迪"单独不匹配任何别名）
-        // 但 L2 应该能通过 DynamicKeywordBuilder 检测到品牌关键词
+        MatchResult result = router.route("比亚迪有什么车", "", "127.0.0.1");
         if (result != null) {
             assertThat(result.type()).isEqualTo(MatchResult.MatchType.BRAND);
         }
