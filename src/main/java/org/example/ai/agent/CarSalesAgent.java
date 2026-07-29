@@ -2,65 +2,66 @@ package org.example.ai.agent;
 
 import org.example.ai.agent.prompt.PromptTemplates;
 import org.example.ai.agent.tool.CarSalesTools;
+import org.example.ai.config.DynamicKeywordBuilder;
+import org.example.ai.knowledge.entity.EntityResolver;
+import org.example.ai.knowledge.entity.ResolvedEntity;
+import org.example.ai.knowledge.hotness.AskCountTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
-import org.springframework.ai.chat.client.advisor.vectorstore.QuestionAnswerAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.ChatMemoryRepository;
 import org.springframework.ai.chat.memory.InMemoryChatMemoryRepository;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.util.Map;
-import java.util.Set;
+import java.time.Instant;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import reactor.core.publisher.Flux;
 
 /**
- * 汽车销售 Agent —— LLM 自主决策，代码只提供工具
+ * 汽车销售 Agent —— LLM 自主决策，代码只提供工具。
  *
- * 和旧架构的区别：
- * - 没有分类器、没有路由、没有分支处理器
- * - LLM 拿到 system prompt + 工具箱，自己判断该做什么
- * - 代码负责：聊天记忆 + 工具注册 + 闲聊阈值控制
+ * 检索（#4 ticket）：两阶段 ——
+ * 1. 相似度召回：子块 + 百科/话术，排除父块（避免父块挤占 topK）
+ * 2. 父块确定性展开：命中车系的父块（热度/价格区间/车型列表）必达，
+ *    EntityResolver 直接命中的车系也无条件附加父块
  */
 @Component
 public class CarSalesAgent {
 
     private static final Logger log = LoggerFactory.getLogger(CarSalesAgent.class);
 
-    /** 记忆窗口：保留最近 40 条消息（约 20 轮对话） */
     private static final int MEMORY_MAX_MESSAGES = 40;
-
-    /** 闲聊阈值：连续非买车意图超过此值则自动终止 */
     private static final int IDLE_CHAT_LIMIT = 3;
-
-    /** 闲聊终止语 */
     private static final String IDLE_TERMINATION = "买车的事随时找我，先不打扰您了～有需要再聊！";
+    private static final int RAG_TOPK = 5;
+    private static final double RAG_THRESHOLD = 0.5;
+    /** 父块匹配置信度门槛：top-1 低于此值视为"非车系问题"，走泛检索 */
+    private static final double SERIES_CONFIDENCE = 0.6;
 
-    // 每个用户连续闲聊计数
     private final Map<String, Integer> idleCounters = new ConcurrentHashMap<>();
 
     private final ChatClient chatClient;
     private final ChatMemory chatMemory;
+    private final AskCountTracker askCountTracker;
+    private final EntityResolver entityResolver;
+    private final DynamicKeywordBuilder keywordBuilder;
+    private final VectorStore vectorStore;
 
-    /**
-     * 汽车相关的关键词 —— 命中任一即视为"非闲聊"
-     * 覆盖：品牌、车型、购车术语、门店相关
-     */
-    private static final Set<String> CAR_KEYWORDS = Set.of(
-            "比亚迪", "特斯拉", "小鹏", "理想", "蔚来", "问界", "极氪", "领克", "长安",
-            "吉利", "长城", "奇瑞", "宝马", "奔驰", "奥迪", "丰田", "本田", "大众",
-            "宋", "秦", "汉", "唐", "海鸥", "海豚", "海豹", "元",
-            "model", "model3", "modely", "models", "modelx",
-            "p7", "g6", "g9", "l6", "l7", "l8", "l9", "m9", "et5", "et7",
+    /** 通用汽车话题词（不含品牌/车系名——那一侧由 DynamicKeywordBuilder + EntityResolver 覆盖，#12 ticket） */
+    private static final Set<String> CAR_TOPIC_WORDS = Set.of(
             "买车", "购车", "看车", "试驾", "订车", "提车",
             "多少钱", "报价", "价格", "售价", "指导价", "落地价", "优惠",
             "库存", "现车", "有货", "多久提车",
@@ -72,115 +73,284 @@ public class CarSalesAgent {
     );
 
     public CarSalesAgent(ChatModel chatModel, CarSalesTools tools, VectorStore vectorStore,
-                         @Value("${company.name}") String companyName) {
-        // 内存聊天记忆，显式设置窗口大小
+                         @Value("${company.name}") String companyName,
+                         AskCountTracker askCountTracker,
+                         EntityResolver entityResolver,
+                         DynamicKeywordBuilder keywordBuilder) {
+        this.askCountTracker = askCountTracker;
+        this.entityResolver = entityResolver;
+        this.keywordBuilder = keywordBuilder;
+        this.vectorStore = vectorStore;
+
         ChatMemoryRepository repo = new InMemoryChatMemoryRepository();
         this.chatMemory = MessageWindowChatMemory.builder()
                 .chatMemoryRepository(repo)
                 .maxMessages(MEMORY_MAX_MESSAGES)
                 .build();
 
-        // 记忆 Advisor
         MessageChatMemoryAdvisor memoryAdvisor = MessageChatMemoryAdvisor.builder(chatMemory).build();
 
-        // RAG 检索 Advisor：每次请求前自动从知识库检索相关块注入上下文
-        // topK=5 召回百科/话术/车源三类知识；阈值 0.5 以下视为不相关不注入（防幻觉）
-        QuestionAnswerAdvisor ragAdvisor = QuestionAnswerAdvisor.builder(vectorStore)
-                .searchRequest(SearchRequest.builder()
-                        .topK(5)
-                        .similarityThreshold(0.5)
-                        .build())
-                .build();
-
-        // 动态生成 System Prompt（公司名来自配置文件，门店信息通过 getStoreInfo() 工具查询）
         String systemPrompt = PromptTemplates.systemPrompt(companyName);
 
-        // ChatClient：动态 system prompt + 记忆 + RAG 检索 + 工具
+        // 不再使用 QuestionAnswerAdvisor —— 检索改为两阶段手动调用（#4 ticket）
         this.chatClient = ChatClient.builder(chatModel)
                 .defaultSystem(systemPrompt)
-                .defaultAdvisors(memoryAdvisor, ragAdvisor)
+                .defaultAdvisors(memoryAdvisor)
                 .defaultTools(tools)
                 .build();
 
-        log.info("CarSalesAgent 初始化完成（公司：{}, 工具数：3, 记忆窗口：{}条, 闲聊阈值：{}轮, RAG：topK=5/threshold=0.5）",
-                companyName, MEMORY_MAX_MESSAGES, IDLE_CHAT_LIMIT);
+        log.info("CarSalesAgent 初始化完成（公司：{}, 设施：两阶段检索 topK={}/threshold={}, EntityResolver：{} 别名）",
+                companyName, RAG_TOPK, RAG_THRESHOLD, entityResolver.aliasCount());
     }
 
     /**
-     * 处理用户消息
+     * 处理用户消息。
      */
     public String chat(String userId, String userMessage) {
-        log.info("Agent 收到: userId={}, message={}",
-                userId, userMessage.substring(0, Math.min(80, userMessage.length())));
+        List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
-        // ---- 闲聊阈值检查 ----
-        if (isIdleChat(userMessage)) {
-            int count = idleCounters.merge(userId, 1, Integer::sum);
-            log.info("闲聊计数: userId={}, count={}/{}", userId, count, IDLE_CHAT_LIMIT);
-            if (count > IDLE_CHAT_LIMIT) {
-                log.info("闲聊阈值触发: userId={}, 直接返回终止语", userId);
-                return IDLE_TERMINATION;
+        int idleCount = idleCounters.getOrDefault(userId, 0);
+        boolean isIdle = isIdleChat(userMessage) && matchedSeries.isEmpty();
+        boolean terminated = false;
+        String response;
+
+        if (isIdle) {
+            idleCount = idleCounters.merge(userId, 1, Integer::sum);
+            if (idleCount > IDLE_CHAT_LIMIT) {
+                response = IDLE_TERMINATION;
+                terminated = true;
+            } else {
+                response = chatClient.prompt()
+                        .user(userMessage)
+                        .advisors(a -> a.param("chat_memory_conversation_id", userId))
+                        .call()
+                        .content();
             }
         } else {
-            // 命中汽车相关关键词 → 重置计数
             idleCounters.remove(userId);
+            idleCount = 0;
+            for (ResolvedEntity e : matchedSeries) {
+                askCountTracker.recordMention(e.seriesKey());
+            }
+
+            // 两阶段检索（#4 ticket）：子块相似度 + 父块确定性展开
+            String ragContext = retrieveContext(userMessage, matchedSeries);
+
+            response = chatClient.prompt()
+                    .user(userMessage)
+                    .system(ragContext)
+                    .advisors(a -> a.param("chat_memory_conversation_id", userId))
+                    .call()
+                    .content();
         }
 
-        // ---- 调用 LLM ----
-        String response = chatClient.prompt()
-                .user(userMessage)
-                .advisors(a -> a.param("chat_memory_conversation_id", userId))
-                .call()
-                .content();
-
-        log.info("Agent 回复: length={}", response != null ? response.length() : 0);
+        logConversation(userId, userMessage, response, idleCount, isIdle, terminated, matchedSeries);
         return response;
     }
 
     /**
-     * 判断用户输入是否为"闲聊"（非买车意图）
-     * 规则：转小写后逐词匹配，命中任一汽车关键词即视为非闲聊
+     * 三层检索（#4 ticket，2026-07-29）：
+     *
+     * 主路径（命中车系）：
+     *   阶段一 — 父块相似度召回（车系级语义匹配，阈值 0.6，topK=3）
+     *   阶段二 — 命中车系子块全量展开（topK=20）
+     *   不注入百科/话术（有车系锚点时通用知识是噪音）
+     *
+     * 回退路径（未命中车系）：
+     *   子块泛检索（topK=5）+ 百科/话术补充（topK=3）
      */
-    private boolean isIdleChat(String message) {
-        String lower = message.toLowerCase();
-        for (String kw : CAR_KEYWORDS) {
-            if (lower.contains(kw.toLowerCase())) {
-                return false; // 命中 → 不是闲聊
+    private String retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries) {
+        // EntityResolver 命中的车系（别名匹配）
+        Set<String> entitySeries = matchedSeries.stream()
+                .map(ResolvedEntity::seriesKey).collect(Collectors.toSet());
+
+        // ---- 阶段一：父块相似度召回，阈值提至 0.6（决策：非车系问题不硬套） ----
+        Filter.Expression parentOnly = new FilterExpressionBuilder().and(
+                new FilterExpressionBuilder().eq("type", "车源"),
+                new FilterExpressionBuilder().eq("level", "parent")
+        ).build();
+
+        List<Document> parentDocs = vectorStore.similaritySearch(
+                SearchRequest.builder()
+                        .query(userMessage)
+                        .topK(3)
+                        .similarityThreshold(SERIES_CONFIDENCE)
+                        .filterExpression(parentOnly)
+                        .build());
+
+        Set<String> hitSeries = new LinkedHashSet<>();
+        for (Document p : parentDocs) {
+            String sid = metaStr(p, "series_id");
+            if (sid != null && !sid.isEmpty()) hitSeries.add(sid);
+        }
+        hitSeries.addAll(entitySeries);
+
+        // ---- 回退路径：父块相似度 + EntityResolver 都没命中任何车系 ----
+        if (hitSeries.isEmpty()) {
+            Filter.Expression childOnly = new FilterExpressionBuilder().and(
+                    new FilterExpressionBuilder().eq("type", "车源"),
+                    new FilterExpressionBuilder().eq("level", "child")
+            ).build();
+            List<Document> childDocs = vectorStore.similaritySearch(
+                    SearchRequest.builder()
+                            .query(userMessage)
+                            .topK(RAG_TOPK)
+                            .similarityThreshold(RAG_THRESHOLD)
+                            .filterExpression(childOnly)
+                            .build());
+
+            Filter.Expression nonCar = new FilterExpressionBuilder().ne("type", "车源").build();
+            List<Document> knowledgeDocs = vectorStore.similaritySearch(
+                    SearchRequest.builder()
+                            .query(userMessage)
+                            .topK(3)
+                            .similarityThreshold(RAG_THRESHOLD)
+                            .filterExpression(nonCar)
+                            .build());
+
+            return buildContext(Collections.emptyList(), childDocs, knowledgeDocs);
+        }
+
+        // ---- 主路径：命中车系 ----
+
+        // 补充 EntityResolver 命中但父块相似度没搜到的父块
+        for (String sid : entitySeries) {
+            boolean alreadyIn = parentDocs.stream()
+                    .anyMatch(d -> sid.equals(metaStr(d, "series_id")));
+            if (!alreadyIn) {
+                Filter.Expression pf = new FilterExpressionBuilder().and(
+                        new FilterExpressionBuilder().eq("type", "车源"),
+                        new FilterExpressionBuilder().and(
+                                new FilterExpressionBuilder().eq("level", "parent"),
+                                new FilterExpressionBuilder().eq("series_id", sid))
+                ).build();
+                parentDocs.addAll(vectorStore.similaritySearch(
+                        SearchRequest.builder().query(sid).topK(1).filterExpression(pf).build()));
             }
         }
-        return true; // 零命中 → 是闲聊
+
+        // ---- 阶段二：命中车系子块全量展开（决策：全量，不截断） ----
+        List<Document> childDocs = new ArrayList<>();
+        Set<Object> seenSkuIds = new HashSet<>();
+        for (String sid : hitSeries) {
+            Filter.Expression cf = new FilterExpressionBuilder().and(
+                    new FilterExpressionBuilder().eq("type", "车源"),
+                    new FilterExpressionBuilder().and(
+                            new FilterExpressionBuilder().eq("level", "child"),
+                            new FilterExpressionBuilder().eq("parent_series_id", sid))
+            ).build();
+            for (Document c : vectorStore.similaritySearch(
+                    SearchRequest.builder().query(sid).topK(20).filterExpression(cf).build())) {
+                Object skuId = c.getMetadata().get("sku_id");
+                if (skuId != null && seenSkuIds.add(skuId)) childDocs.add(c);
+            }
+        }
+
+        // 有车系锚点时跳过百科/话术（决策：避免通用知识与具体车系混淆）
+        return buildContext(parentDocs, childDocs, Collections.emptyList());
+    }
+
+    /** 组装上下文 */
+    private String buildContext(List<Document> parentDocs, List<Document> childDocs,
+                                 List<Document> knowledgeDocs) {
+        StringBuilder ctx = new StringBuilder();
+        if (!parentDocs.isEmpty()) {
+            ctx.append("## 匹配车系\n");
+            for (Document d : parentDocs) ctx.append(d.getText()).append("\n");
+        }
+        if (!childDocs.isEmpty()) {
+            ctx.append("\n## 在售车型\n");
+            for (Document d : childDocs) ctx.append("- ").append(d.getText()).append("\n");
+        }
+        if (!knowledgeDocs.isEmpty()) {
+            ctx.append("\n## 相关知识\n");
+            for (Document d : knowledgeDocs) {
+                ctx.append("- [").append(metaStr(d, "type") != null ? metaStr(d, "type") : "?")
+                   .append("] ").append(d.getText()).append("\n");
+            }
+        }
+        return ctx.toString();
+    }
+
+    private boolean isIdleChat(String message) {
+        String lower = message.toLowerCase();
+        for (String kw : CAR_TOPIC_WORDS) {
+            if (lower.contains(kw.toLowerCase())) return false;
+        }
+        if (keywordBuilder.containsAnyKeyword(message)) return false;
+        if (entityResolver.hasMatch(message)) return false;
+        return true;
+    }
+
+    private List<ResolvedEntity> resolveEntities(String message) {
+        return entityResolver.resolve(message);
+    }
+
+    private void logConversation(String userId, String userMessage, String response,
+                                  int idleCount, boolean isIdle, boolean terminated,
+                                  List<ResolvedEntity> matchedSeries) {
+        String matchedJson = matchedSeries.stream()
+                .map(ResolvedEntity::displayName)
+                .map(this::escapeJson)
+                .collect(Collectors.joining("\",\"", "[\"", "\"]"));
+        String json = String.format(
+                "{\"ts\":\"%s\",\"userId\":\"%s\",\"msg\":%s,\"reply\":%s,\"idleCount\":%d,\"isIdle\":%b,\"terminated\":%b,\"matched\":%s}",
+                Instant.now().toString(), escapeJson(userId), escapeJson(userMessage),
+                escapeJson(response != null ? response : ""), idleCount, isIdle, terminated, matchedJson);
+        log.info(json);
+    }
+
+    private String escapeJson(String s) {
+        if (s == null) return "\"\"";
+        return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\"";
     }
 
     /**
-     * 处理用户消息（流式输出，SSE）
+     * 处理用户消息（流式输出，SSE）。
      */
     public Flux<String> chatStream(String userId, String userMessage) {
-        log.info("Agent 收到(流式): userId={}, message={}",
-                userId, userMessage.substring(0, Math.min(80, userMessage.length())));
+        List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
-        // 闲聊阈值检查（和同步版共用同一套逻辑）
-        if (isIdleChat(userMessage)) {
-            int count = idleCounters.merge(userId, 1, Integer::sum);
-            log.info("闲聊计数(流式): userId={}, count={}/{}", userId, count, IDLE_CHAT_LIMIT);
-            if (count > IDLE_CHAT_LIMIT) {
-                log.info("闲聊阈值触发(流式): userId={}, 直接返回终止语", userId);
+        int idleCount = idleCounters.getOrDefault(userId, 0);
+        boolean isIdle = isIdleChat(userMessage) && matchedSeries.isEmpty();
+        boolean terminated = false;
+
+        if (isIdle) {
+            idleCount = idleCounters.merge(userId, 1, Integer::sum);
+            if (idleCount > IDLE_CHAT_LIMIT) {
+                terminated = true;
+                logConversation(userId, userMessage, IDLE_TERMINATION, idleCount, true, true, matchedSeries);
                 return Flux.just(IDLE_TERMINATION);
             }
         } else {
             idleCounters.remove(userId);
+            idleCount = 0;
+            for (ResolvedEntity e : matchedSeries) {
+                askCountTracker.recordMention(e.seriesKey());
+            }
         }
+
+        logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated, matchedSeries);
+
+        // 两阶段检索（#4 ticket）
+        String ragContext = retrieveContext(userMessage, matchedSeries);
 
         return chatClient.prompt()
                 .user(userMessage)
+                .system(ragContext)
                 .advisors(a -> a.param("chat_memory_conversation_id", userId))
                 .stream()
                 .content();
     }
 
-    /**
-     * 暴露给外部（如 Controller）用于清理会话
-     */
     public void resetIdleCounter(String userId) {
         idleCounters.remove(userId);
+    }
+
+    /** 安全读取 metadata 字符串值 */
+    private static String metaStr(Document d, String key) {
+        Object v = d.getMetadata().get(key);
+        return v != null ? v.toString() : null;
     }
 }

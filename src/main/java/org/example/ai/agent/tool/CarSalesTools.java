@@ -1,5 +1,11 @@
 package org.example.ai.agent.tool;
 
+import org.example.ai.config.DynamicKeywordBuilder;
+import org.example.ai.location.GeoLocator;
+import org.example.ai.location.HotCar;
+import org.example.ai.location.HotCarRepository;
+import org.example.ai.location.StoreInfo;
+import org.example.ai.location.StoreLocator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -19,9 +25,18 @@ public class CarSalesTools {
 
     private static final Logger log = LoggerFactory.getLogger(CarSalesTools.class);
     private final JdbcTemplate jdbc;
+    private final StoreLocator storeLocator;
+    private final GeoLocator geoLocator;
+    private final DynamicKeywordBuilder keywordBuilder;
+    private final HotCarRepository hotCarRepo;
 
-    public CarSalesTools(JdbcTemplate jdbc) {
+    public CarSalesTools(JdbcTemplate jdbc, StoreLocator storeLocator, GeoLocator geoLocator,
+                         DynamicKeywordBuilder keywordBuilder, HotCarRepository hotCarRepo) {
         this.jdbc = jdbc;
+        this.storeLocator = storeLocator;
+        this.geoLocator = geoLocator;
+        this.keywordBuilder = keywordBuilder;
+        this.hotCarRepo = hotCarRepo;
     }
 
     /**
@@ -37,25 +52,11 @@ public class CarSalesTools {
     public String searchInventory(String query) {
         log.info("Tool调用: searchInventory('{}')", query);
 
-        // 1. 提取数据库中所有品牌和车系名作为匹配词
-        List<String> brands = jdbc.queryForList("SELECT DISTINCT brand_name FROM car_sku WHERE is_deleted = 0", String.class);
-        List<String> series = jdbc.queryForList("SELECT DISTINCT series_name FROM car_sku WHERE is_deleted = 0", String.class);
-        List<String> allTerms = new ArrayList<>();
-        allTerms.addAll(brands);
-        allTerms.addAll(series);
-        allTerms.removeIf(t -> t == null || t.isBlank());
-        allTerms.sort((a, b) -> Integer.compare(b.length(), a.length())); // 长词优先
+        // 从动态关键词表提取匹配的品牌/车系名（#12 ticket，替代每次查库）
+        List<String> matched = keywordBuilder.extractKeywords(query);
+        if (matched.size() > 3) matched = matched.subList(0, 3);
 
-        // 2. 检测匹配词
-        List<String> matched = new ArrayList<>();
-        for (String term : allTerms) {
-            if (query.toLowerCase().contains(term.toLowerCase()) && !matched.contains(term)) {
-                matched.add(term);
-            }
-            if (matched.size() >= 3) break;
-        }
-
-        // 3. 数据库查询（只查上架且未删除的车源）
+        // 数据库查询（只查上架且未删除的车源）
         List<Map<String, Object>> rows;
         String baseSql = "SELECT * FROM car_sku WHERE sale_status = 1 AND is_deleted = 0 AND ";
         if (matched.isEmpty()) {
@@ -89,6 +90,7 @@ public class CarSalesTools {
                     r.get("guide_price"),
                     fenToWan(r.get("sale_price")),
                     fenToWan(r.get("sale_price_finance")),
+
                     energyType(r.get("energy_type"))));
             Object memo = r.get("memo");
             if (memo != null && !memo.toString().isBlank()) {
@@ -99,23 +101,67 @@ public class CarSalesTools {
     }
 
     /**
-     * 获取所有门店信息
+     * 获取门店信息（按用户位置距离排序，最近的门店排前面）。
      */
     @org.springframework.ai.tool.annotation.Tool(description = """
         获取公司所有门店的地址、电话、营业时间。当用户问"你们在哪""门店地址""联系方式"时调用。
+        返回按距离排序的门店列表，最近门店排在最前面。
         """)
     public String getStoreInfo() {
         log.info("Tool调用: getStoreInfo()");
-        List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT * FROM store_config WHERE is_active = 1 ORDER BY id");
 
-        if (rows.isEmpty()) return "暂无门店信息。";
+        var loc = geoLocator.locate(null);
+        List<StoreInfo> stores;
+        if (loc != null) {
+            stores = storeLocator.findAllWithDistance(loc.lat(), loc.lng());
+        } else {
+            // 无法定位时回退到原始顺序
+            stores = storeLocator.findAllActiveRaw();
+        }
+
+        if (stores.isEmpty()) return "暂无门店信息。";
 
         StringBuilder sb = new StringBuilder();
-        for (Map<String, Object> r : rows) {
-            sb.append(String.format("【%s】%s\n地址：%s\n电话：%s\n营业时间：%s\n\n",
-                    r.get("store_name"), r.get("region"),
-                    r.get("address"), r.get("phone"), r.get("working_hours")));
+        for (int i = 0; i < stores.size(); i++) {
+            StoreInfo s = stores.get(i);
+            double km = loc != null
+                    ? StoreLocator.haversineKm(loc.lat(), loc.lng(), s.latitude(), s.longitude())
+                    : 0;
+            sb.append(String.format("【%s】%s %s\n地址：%s\n电话：%s\n营业时间：%s",
+                    s.storeName(), s.region(),
+                    km > 0 ? String.format("（距您约 %.1f 公里）", km) : "",
+                    s.address(), s.phone(), s.workingHours()));
+            sb.append("\n\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 获取指定门店的热门车系排行（#11 ticket，决策7）。
+     */
+    @org.springframework.ai.tool.annotation.Tool(description = """
+        获取指定门店的热门车系排行榜。当用户问"你们店什么车卖得好""最近什么车热门""推荐一款"时调用。
+        参数 storeId 为门店ID（1-6），不传则查所有门店汇总热度。
+        返回车系名、销量、咨询量。
+        """)
+    public String getHotCars(Integer storeId) {
+        log.info("Tool调用: getHotCars({})", storeId);
+        List<HotCar> hot;
+        if (storeId != null && storeId > 0) {
+            hot = hotCarRepo.getHotCars(storeId, 5);
+        } else {
+            // 查第1家门店作为默认
+            hot = hotCarRepo.getHotCars(1, 5);
+        }
+
+        if (hot.isEmpty()) return "暂无该门店的热度数据。";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("热门车系排行：\n");
+        for (int i = 0; i < hot.size(); i++) {
+            HotCar h = hot.get(i);
+            sb.append(String.format("%d. %s — 销量 %d 台，咨询 %d 次\n",
+                    i + 1, h.seriesName(), h.saleCount(), h.inquiryCount()));
         }
         return sb.toString();
     }
