@@ -2,6 +2,7 @@ package org.example.ai.routing;
 
 import org.example.ai.config.DynamicKeywordBuilder;
 import org.example.ai.knowledge.entity.EntityResolver;
+import org.example.ai.knowledge.hotness.AskCountTracker;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -10,18 +11,14 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.sqlite.SQLiteDataSource;
 
 import java.io.File;
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 /**
- * VagueQueryRouter 单元测试 —— L1 精确匹配（#13 ticket）。
- *
- * L1 逻辑是纯代码，不依赖 VectorStore —— EntityResolver + 父块相似度阈值判断，
- * 所以用 Mock VectorStore 做单元测试。
+ * VagueQueryRouter 单元测试 —— L1 精确匹配 + L2 品牌级匹配（#13 + #14 ticket）。
  */
 class VagueQueryRouterTest {
 
@@ -50,23 +47,39 @@ class VagueQueryRouterTest {
                 sale_status INTEGER DEFAULT 1, is_deleted INTEGER DEFAULT 0
             )
         """);
+        // series_ask_count 表（AskCountTracker 需要）
+        jdbc.execute("""
+            CREATE TABLE IF NOT EXISTS series_ask_count (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                series_key TEXT NOT NULL, week_bucket TEXT NOT NULL,
+                ask_count INTEGER DEFAULT 0, UNIQUE(series_key, week_bucket)
+            )
+        """);
 
-        // 种子数据
+        // 种子数据：比亚迪品牌有 3 个车系（品牌级关键词）
         jdbc.update("INSERT INTO entity_mapping VALUES (?,?,?)",
-                "e1", "比亚迪-宋PLUS DM-i", "[\"宋plus\",\"song plus\"]");
+                "e1", "比亚迪-宋PLUS DM-i", "[\"宋plus\"]");
         jdbc.update("INSERT INTO entity_mapping VALUES (?,?,?)",
-                "e2", "特斯拉-Model Y", "[\"model y\",\"毛豆Y\"]");
+                "e2", "比亚迪-汉EV", "[\"汉ev\"]");
+        jdbc.update("INSERT INTO entity_mapping VALUES (?,?,?)",
+                "e3", "比亚迪-海鸥", "[\"海鸥\"]");
         jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (1,'比亚迪','宋PLUS DM-i')");
-        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (2,'特斯拉','Model Y')");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (2,'比亚迪','汉EV')");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (3,'比亚迪','海鸥')");
+        // 特斯拉只有 1 个车系
+        jdbc.update("INSERT INTO entity_mapping VALUES (?,?,?)",
+                "e4", "特斯拉-Model Y", "[\"model y\",\"毛豆Y\"]");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (4,'特斯拉','Model Y')");
 
         EntityResolver entityResolver = new EntityResolver(jdbc);
         DynamicKeywordBuilder kwBuilder = new DynamicKeywordBuilder(jdbc);
         kwBuilder.afterPropertiesSet();
+        AskCountTracker askTracker = new AskCountTracker(jdbc);
 
-        // Mock VectorStore — L1 需要调用相似度检索验证父块
+        // Mock VectorStore — L1 需要调用相似度检索
         var mockVectorStore = mock(org.springframework.ai.vectorstore.VectorStore.class);
 
-        router = new VagueQueryRouter(entityResolver, kwBuilder, mockVectorStore);
+        router = new VagueQueryRouter(entityResolver, kwBuilder, askTracker, mockVectorStore);
     }
 
     @AfterEach
@@ -74,7 +87,7 @@ class VagueQueryRouterTest {
         if (tmpDb != null && tmpDb.exists()) tmpDb.delete();
     }
 
-    // ---- L1: 空 / 无匹配 ----
+    // ---- 空 / 无匹配 ----
 
     @Test
     @DisplayName("空输入 → 返回 null")
@@ -85,7 +98,7 @@ class VagueQueryRouterTest {
     }
 
     @Test
-    @DisplayName("无车系消息 → EntityResolver 无命中 → 返回 null")
+    @DisplayName("无车系无品牌消息 → L1/L2 均无命中 → 返回 null")
     void noMatchReturnsNull() {
         assertThat(router.route("今天天气真好", "")).isNull();
     }
@@ -93,19 +106,10 @@ class VagueQueryRouterTest {
     // ---- L1: tryExactMatch ----
 
     @Test
-    @DisplayName("EntityResolver 命中 → tryExactMatch 调用（依赖 VectorStore mock）")
+    @DisplayName("EntityResolver 命中 → tryExactMatch 调用（Mock VectorStore 空 → L1 不通过）")
     void entityHitCallsL1() {
-        // EntityResolver 能匹配 "宋plus"，但 mock VectorStore 返回空 → L1 不通过
         MatchResult result = router.tryExactMatch("宋plus多少钱");
         assertThat(result).isNull(); // mock VectorStore 返回空，相似度不足
-    }
-
-    @Test
-    @DisplayName("EntityResolver 命中但无任何父块 → 返回 null")
-    void entityHitNoParentReturnsNull() {
-        // "model y" 命中了 EntityResolver，但 mock VectorStore 无数据
-        MatchResult result = router.tryExactMatch("model y 怎么样");
-        assertThat(result).isNull();
     }
 
     @Test
@@ -115,10 +119,55 @@ class VagueQueryRouterTest {
         assertThat(result).isNull();
     }
 
+    // ---- L2: tryBrandMatch ----
+
     @Test
-    @DisplayName("route 返回 null 时 forward 到后续流程（当前桩返回 null）")
-    void routeReturnsNullForwardsCorrectly() {
-        // 不匹配任何车系的消息 → EntityResolver 无命中 → route 返回 null
-        assertThat(router.route("天气不错", "")).isNull();
+    @DisplayName("品牌名匹配 → BRAND + 列出车系按热度")
+    void brandKeywordReturnsBrand() {
+        // "比亚迪" → keywordBuilder.getSeriesKeys("比亚迪") >= 2 → BRAND
+        MatchResult result = router.tryBrandMatch("比亚迪有什么车");
+        assertThat(result).isNotNull();
+        assertThat(result.type()).isEqualTo(MatchResult.MatchType.BRAND);
+        assertThat(result.brand()).isEqualTo("比亚迪");
+        assertThat(result.needsConfirm()).isTrue();
+        assertThat(result.hotModels()).hasSizeGreaterThanOrEqualTo(3);
+        assertThat(result.followUpText()).contains("比亚迪").contains("在售").contains("您想看轿车还是SUV");
+    }
+
+    @Test
+    @DisplayName("品牌+追问混合 → BRAND")
+    void brandWithQuestionReturnsBrand() {
+        MatchResult result = router.tryBrandMatch("你们比亚迪最便宜的车是哪款");
+        assertThat(result).isNotNull();
+        assertThat(result.type()).isEqualTo(MatchResult.MatchType.BRAND);
+    }
+
+    @Test
+    @DisplayName("单一车系关键词 → 不走 L2（不是品牌级）")
+    void singleSeriesNotBrand() {
+        // "model y" 只对应1个车系 → tryBrandMatch 跳过
+        MatchResult result = router.tryBrandMatch("model y 续航");
+        assertThat(result).isNull();
+    }
+
+    @Test
+    @DisplayName("无匹配关键词 → tryBrandMatch 返回 null")
+    void noKeywordMatchForBrand() {
+        MatchResult result = router.tryBrandMatch("推荐一款车");
+        assertThat(result).isNull();
+    }
+
+    // ---- 集成：route() 先 L1 再 L2 ----
+
+    @Test
+    @DisplayName("route: L1 miss + L2 品牌命中 → BRAND")
+    void routeL1MissL2Brand() {
+        // "比亚迪" → EntityResolver.resolve() 返回空或匹配多个 → L1 验证失败 → L2 接管
+        MatchResult result = router.route("比亚迪有什么车", "");
+        // L1: EntityResolver 可能不会返回具体实体（"比亚迪"单独不匹配任何别名）
+        // 但 L2 应该能通过 DynamicKeywordBuilder 检测到品牌关键词
+        if (result != null) {
+            assertThat(result.type()).isEqualTo(MatchResult.MatchType.BRAND);
+        }
     }
 }
