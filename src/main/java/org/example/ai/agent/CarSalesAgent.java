@@ -6,6 +6,11 @@ import org.example.ai.config.DynamicKeywordBuilder;
 import org.example.ai.knowledge.entity.EntityResolver;
 import org.example.ai.knowledge.entity.ResolvedEntity;
 import org.example.ai.knowledge.hotness.AskCountTracker;
+import org.example.ai.location.GeoLocation;
+import org.example.ai.location.GeoLocator;
+import org.example.ai.location.StoreLocator;
+import org.example.ai.routing.MatchResult;
+import org.example.ai.routing.VagueQueryRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -58,6 +63,9 @@ public class CarSalesAgent {
     private final AskCountTracker askCountTracker;
     private final EntityResolver entityResolver;
     private final DynamicKeywordBuilder keywordBuilder;
+    private final VagueQueryRouter router;
+    private final GeoLocator geoLocator;
+    private final StoreLocator storeLocator;
     private final VectorStore vectorStore;
 
     /** 通用汽车话题词（不含品牌/车系名——那一侧由 DynamicKeywordBuilder + EntityResolver 覆盖，#12 ticket） */
@@ -76,10 +84,16 @@ public class CarSalesAgent {
                          @Value("${company.name}") String companyName,
                          AskCountTracker askCountTracker,
                          EntityResolver entityResolver,
-                         DynamicKeywordBuilder keywordBuilder) {
+                         DynamicKeywordBuilder keywordBuilder,
+                         VagueQueryRouter router,
+                         GeoLocator geoLocator,
+                         StoreLocator storeLocator) {
         this.askCountTracker = askCountTracker;
         this.entityResolver = entityResolver;
         this.keywordBuilder = keywordBuilder;
+        this.router = router;
+        this.geoLocator = geoLocator;
+        this.storeLocator = storeLocator;
         this.vectorStore = vectorStore;
 
         ChatMemoryRepository repo = new InMemoryChatMemoryRepository();
@@ -105,8 +119,12 @@ public class CarSalesAgent {
 
     /**
      * 处理用户消息。
+     *
+     * @param userId      用户标识（会话隔离）
+     * @param userMessage 用户消息文本
+     * @param userIp      客户端 IP（GeoLocator 定位用，FixedGeoLocator 当前忽略此参数）
      */
-    public String chat(String userId, String userMessage) {
+    public String chat(String userId, String userMessage, String userIp) {
         List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
         int idleCount = idleCounters.getOrDefault(userId, 0);
@@ -133,15 +151,29 @@ public class CarSalesAgent {
                 askCountTracker.recordMention(e.seriesKey());
             }
 
-            // 两阶段检索（#4 ticket）：子块相似度 + 父块确定性展开
-            String ragContext = retrieveContext(userMessage, matchedSeries);
+            // VagueQueryRouter 路由（#13 ticket）
+            String historyText = buildHistoryText(userId);
+            MatchResult route = router.route(userMessage, historyText);
 
-            response = chatClient.prompt()
-                    .user(userMessage)
-                    .system(ragContext)
-                    .advisors(a -> a.param("chat_memory_conversation_id", userId))
-                    .call()
-                    .content();
+            if (route != null && route.needsConfirm()) {
+                // BRAND 或 VAGUE+确认 → 直接返回追问文本，不调 LLM
+                response = route.followUpText();
+            } else {
+                // EXACT / null → 走两阶段检索（#4 ticket）
+                String ragContext = retrieveContext(userMessage, matchedSeries);
+
+                // VAGUE + needsInference → 追问文本注入 system prompt
+                if (route != null && route.needsInference() && route.followUpText() != null) {
+                    ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
+                }
+
+                response = chatClient.prompt()
+                        .user(userMessage)
+                        .system(ragContext)
+                        .advisors(a -> a.param("chat_memory_conversation_id", userId))
+                        .call()
+                        .content();
+            }
         }
 
         logConversation(userId, userMessage, response, idleCount, isIdle, terminated, matchedSeries);
@@ -286,6 +318,22 @@ public class CarSalesAgent {
         return entityResolver.resolve(message);
     }
 
+    /** 提取最近 10 轮对话历史文本（供 VagueQueryRouter L3 使用）。 */
+    private String buildHistoryText(String userId) {
+        List<org.springframework.ai.chat.messages.Message> messages = chatMemory.get(userId);
+        if (messages == null || messages.isEmpty()) return "";
+        // 取最近 10 条
+        int start = Math.max(0, messages.size() - 10);
+        StringBuilder sb = new StringBuilder();
+        for (int i = start; i < messages.size(); i++) {
+            String text = messages.get(i).getText();
+            if (text != null && !text.isBlank()) {
+                sb.append(text).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
     private void logConversation(String userId, String userMessage, String response,
                                   int idleCount, boolean isIdle, boolean terminated,
                                   List<ResolvedEntity> matchedSeries) {
@@ -309,7 +357,7 @@ public class CarSalesAgent {
     /**
      * 处理用户消息（流式输出，SSE）。
      */
-    public Flux<String> chatStream(String userId, String userMessage) {
+    public Flux<String> chatStream(String userId, String userMessage, String userIp) {
         List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
         int idleCount = idleCounters.getOrDefault(userId, 0);
@@ -333,8 +381,19 @@ public class CarSalesAgent {
 
         logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated, matchedSeries);
 
+        // VagueQueryRouter 路由（#13 ticket）
+        String historyText = buildHistoryText(userId);
+        MatchResult route = router.route(userMessage, historyText);
+
+        if (route != null && route.needsConfirm()) {
+            return Flux.just(route.followUpText());
+        }
+
         // 两阶段检索（#4 ticket）
         String ragContext = retrieveContext(userMessage, matchedSeries);
+        if (route != null && route.needsInference() && route.followUpText() != null) {
+            ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
+        }
 
         return chatClient.prompt()
                 .user(userMessage)
