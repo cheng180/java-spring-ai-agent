@@ -235,11 +235,93 @@ class RetrievalContextAssemblerTest {
         assertThat(ctx).doesNotContain("宋PLUS"); // 其他车系不进上下文
     }
 
+    // ---- #26：FAMILY 级分层（同品牌多车系） ----
+
+    @Test
+    @DisplayName("FAMILY 级：同品牌多车系 → 只取命中车系父块 + 截断在售款型段")
+    void familyLevelInjectsTruncatedParentsOnly() {
+        // 种子 4 个比亚迪车系（2 实体 < 4 总数 → FAMILY 而非 BRAND）
+        seedSku(1, "比亚迪", "秦L");
+        seedSku(2, "比亚迪", "秦PLUS DM-i");
+        seedSku(3, "比亚迪", "汉EV");
+        seedSku(4, "比亚迪", "海鸥");
+        rebuildAssembler();
+
+        Document qinL = doc("【比亚迪 秦L】车系信息\n价格区间：10.00万 ~ 14.00万\n"
+                + "在售款型：\n  - 秦L 2026款 | 全款10.98万\n近期热度：5.0\n",
+                Map.of("series_id", "比亚迪-秦L"));
+        Document qinPlus = doc("【比亚迪 秦PLUS DM-i】车系信息\n价格区间：8.00万 ~ 12.00万\n"
+                + "在售款型：\n  - 秦PLUS 荣耀版 | 全款8.98万\n",
+                Map.of("series_id", "比亚迪-秦PLUS DM-i"));
+        when(vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(qinL))
+                .thenReturn(List.of(qinPlus));
+
+        String ctx = assembler.retrieveContext("比亚迪秦",
+                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i")));
+
+        assertThat(ctx).contains("价格区间：10.00万 ~ 14.00万");  // 摘要保留
+        assertThat(ctx).contains("价格区间：8.00万 ~ 12.00万");
+        assertThat(ctx).doesNotContain("秦L 2026款");              // 车型清单被截断
+        assertThat(ctx).doesNotContain("秦PLUS 荣耀版");
+        assertThat(ctx).doesNotContain("在售款型：");
+        assertThat(ctx).contains("级别指令");
+        verify(vectorStore, times(2)).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    @DisplayName("FAMILY 级：截断锚点丢失 → fail-safe 保留全文（宁长勿错）")
+    void familyTruncationFailSafeKeepsFullText() {
+        seedSku(1, "比亚迪", "秦L");
+        seedSku(2, "比亚迪", "秦PLUS DM-i");
+        seedSku(3, "比亚迪", "汉EV");
+        rebuildAssembler();
+
+        // 模拟父块格式变化：有车型内容但没有"在售款型："锚点
+        Document noAnchor = doc("【比亚迪 秦L】车系信息\n价格区间：10.00万 ~ 14.00万\n"
+                + "车型列表：\n  - 秦L 2026款 | 全款10.98万\n",
+                Map.of("series_id", "比亚迪-秦L"));
+        when(vectorStore.similaritySearch(any(SearchRequest.class)))
+                .thenReturn(List.of(noAnchor))
+                .thenReturn(List.of());
+
+        String ctx = assembler.retrieveContext("比亚迪秦",
+                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i")));
+
+        assertThat(ctx).contains("秦L 2026款"); // 锚点未命中 → 保留全文，不做半截截断
+    }
+
+    @Test
+    @DisplayName("FAMILY 级：父块全部缺失 → 降级回退泛检索")
+    void familyFallsBackWhenAllParentsMissing() {
+        seedSku(1, "比亚迪", "秦L");
+        seedSku(2, "比亚迪", "秦PLUS DM-i");
+        seedSku(3, "比亚迪", "汉EV");
+        rebuildAssembler();
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        Document child = doc("回退子块", Map.of("level", "child"));
+        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of());
+
+        String ctx = assembler.retrieveContext("比亚迪秦",
+                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i")));
+
+        assertThat(ctx).contains("回退子块"); // 走了回退路径而非空上下文
+    }
+
     // ---- helpers ----
 
     private void seedSku(long id, String brand, String series) {
         jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (?,?,?)",
                 id, brand, series);
+    }
+
+    private static org.example.ai.knowledge.entity.ResolvedEntity entity(String brand, String series) {
+        return new org.example.ai.knowledge.entity.ResolvedEntity(
+                "entity:" + brand + ":" + series, brand + "-" + series, brand, series);
     }
 
     private static Document doc(String text, Map<String, Object> meta) {

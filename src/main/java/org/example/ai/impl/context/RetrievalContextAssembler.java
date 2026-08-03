@@ -5,6 +5,7 @@ import org.example.ai.impl.routing.QueryLevel;
 import org.example.ai.impl.routing.QueryLevelClassifier;
 import org.example.ai.impl.search.HybridRetriever;
 import org.example.ai.knowledge.entity.ResolvedEntity;
+import org.example.ai.knowledge.facts.SeriesParentBuilder;
 import org.example.ai.knowledge.hotness.AskCountTracker;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
@@ -46,6 +47,11 @@ public class RetrievalContextAssembler {
             + "然后用一个问题反问用户偏好（如心仪的款式、预算或用途）收尾；"
             + "禁止列出车系/车型清单，禁止展开具体车源；本轮不要调用 searchInventory/getAllCars 工具。";
 
+    /** FAMILY 级级别指令：只讲命中的车系，问用户想深入哪个 */
+    static final String FAMILY_INSTRUCTION =
+            "用户提到了同品牌的多个车系。只介绍上面命中的这几个车系（不要涉及其他车系），"
+            + "不要展开具体款型清单；末尾询问用户想深入了解哪个车系。";
+
     /** SERIES 级级别指令：只讲命中的车系，末尾问是否深入了解 */
     static final String SERIES_INSTRUCTION =
             "用户聚焦单个车系。只介绍这个车系（不要提其他车系），可基于上面的车系信息回答；"
@@ -73,6 +79,12 @@ public class RetrievalContextAssembler {
 
         if (classification.level() == QueryLevel.BRAND) {
             return assembleBrandContext(classification);
+        }
+        if (classification.level() == QueryLevel.FAMILY) {
+            String ctx = assembleFamilyContext(classification);
+            if (ctx != null) return ctx;
+            // 命中车系的父块全部取不到 → 降级回退泛检索，绝不注入空上下文
+            return fallbackContext(userMessage);
         }
         if (classification.level() == QueryLevel.SERIES) {
             String ctx = assembleSeriesContext(classification);
@@ -131,6 +143,31 @@ public class RetrievalContextAssembler {
         String series = seriesKey.contains("-")
                 ? seriesKey.substring(seriesKey.indexOf('-') + 1) : seriesKey;
         return salesBySeriesName.getOrDefault(series, 0L);
+    }
+
+    // ---- FAMILY 级：同品牌多车系 ----
+
+    private String assembleFamilyContext(QueryClassification classification) {
+        // 按 series_id 确定性取命中车系的父块（不走混合检索——BM25 路无过滤会混入噪音）
+        List<Document> parents = new ArrayList<>();
+        for (String sid : classification.seriesKeys()) {
+            parents.addAll(fetchParentsBySeriesId(sid));
+        }
+        if (parents.isEmpty()) return null;
+
+        // 截断"在售款型"段，避免车型清单被倒出；锚点未命中时 fail-safe 保留全文（宁长勿错）
+        List<Document> truncated = parents.stream()
+                .map(p -> new Document(truncateModelsSection(p.getText()), p.getMetadata()))
+                .toList();
+        return buildContext(truncated, List.of(), List.of())
+                + "\n## 级别指令\n" + FAMILY_INSTRUCTION;
+    }
+
+    /** 截断父块文本中 {@link SeriesParentBuilder#MODELS_SECTION} 及其后的车型清单段 */
+    static String truncateModelsSection(String parentText) {
+        int anchor = parentText.indexOf(SeriesParentBuilder.MODELS_SECTION);
+        if (anchor < 0) return parentText;
+        return parentText.substring(0, anchor);
     }
 
     // ---- SERIES 级：单一车系 ----
