@@ -5,11 +5,13 @@ import org.example.ai.impl.routing.QueryLevel;
 import org.example.ai.impl.routing.QueryLevelClassifier;
 import org.example.ai.impl.search.HybridRetriever;
 import org.example.ai.knowledge.entity.ResolvedEntity;
+import org.example.ai.knowledge.hotness.AskCountTracker;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
@@ -17,12 +19,13 @@ import java.util.stream.Collectors;
 
 /**
  * 检索上下文组装器 —— 从 CarSalesAgent 迁出（#23 ticket，预重构），
- * 分层检索分支（#24 ticket，#21 spec）。
+ * 分层检索分支（#24/#25 ticket，#21 spec）。
  *
  * <p>先由 {@link QueryLevelClassifier} 判定查询粒度，再按级别注入不同详细程度的上下文：</p>
  * <ul>
- *   <li>SERIES — 单车系：只注入该车系完整父块 + 级别指令（零子块调用）</li>
- *   <li>BRAND/FAMILY — 后续 ticket 接入</li>
+ *   <li>BRAND — 品牌级：只注入在售车系数量 + 热度 top1 推荐 + 级别指令（不查向量库）</li>
+ *   <li>SERIES — 车系级：只注入该车系完整父块 + 级别指令（零子块调用）</li>
+ *   <li>FAMILY — 后续 ticket 接入</li>
  *   <li>UNRESTRICTED — 现状：主路径全量展开 / 回退泛检索</li>
  * </ul>
  *
@@ -37,6 +40,12 @@ public class RetrievalContextAssembler {
     private static final double RAG_THRESHOLD = 0.5;
     private static final double SERIES_CONFIDENCE = 0.6;
 
+    /** BRAND 级级别指令：只报车系名、只推一款、反问收尾、禁止列清单、本轮禁调库存工具 */
+    static final String BRAND_INSTRUCTION =
+            "用户只问了品牌。告知该品牌有多个车系在售，只推荐上面\"近期最热门\"的那一个车系，"
+            + "然后用一个问题反问用户偏好（如心仪的款式、预算或用途）收尾；"
+            + "禁止列出车系/车型清单，禁止展开具体车源；本轮不要调用 searchInventory/getAllCars 工具。";
+
     /** SERIES 级级别指令：只讲命中的车系，末尾问是否深入了解 */
     static final String SERIES_INSTRUCTION =
             "用户聚焦单个车系。只介绍这个车系（不要提其他车系），可基于上面的车系信息回答；"
@@ -45,18 +54,26 @@ public class RetrievalContextAssembler {
     private final HybridRetriever hybridRetriever;
     private final VectorStore vectorStore;
     private final QueryLevelClassifier classifier;
+    private final AskCountTracker askCountTracker;
+    private final JdbcTemplate jdbc;
 
     public RetrievalContextAssembler(HybridRetriever hybridRetriever, VectorStore vectorStore,
-                                     QueryLevelClassifier classifier) {
+                                     QueryLevelClassifier classifier,
+                                     AskCountTracker askCountTracker, JdbcTemplate jdbc) {
         this.hybridRetriever = hybridRetriever;
         this.vectorStore = vectorStore;
         this.classifier = classifier;
+        this.askCountTracker = askCountTracker;
+        this.jdbc = jdbc;
     }
 
     public String retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries) {
         // ---- 粒度分类（#24） ----
         QueryClassification classification = classifier.classify(userMessage, matchedSeries);
 
+        if (classification.level() == QueryLevel.BRAND) {
+            return assembleBrandContext(classification);
+        }
         if (classification.level() == QueryLevel.SERIES) {
             String ctx = assembleSeriesContext(classification);
             if (ctx != null) return ctx;
@@ -64,8 +81,56 @@ public class RetrievalContextAssembler {
             return fallbackContext(userMessage);
         }
 
-        // ---- UNRESTRICTED：现状行为（BRAND/FAMILY 分支后续 ticket 接入） ----
+        // ---- UNRESTRICTED：现状行为（FAMILY 分支后续 ticket 接入） ----
         return assembleUnrestrictedContext(userMessage, matchedSeries);
+    }
+
+    // ---- BRAND 级：品牌问句 ----
+
+    private String assembleBrandContext(QueryClassification classification) {
+        List<String> seriesKeys = new ArrayList<>(new LinkedHashSet<>(classification.seriesKeys()));
+
+        // 排序：询问热度为主，并列/全零时用门店销量全局求和兜底（冷启动首日即有合理推荐）
+        Map<String, Long> salesBySeriesName = loadGlobalSales();
+        Map<String, Double> heat = new HashMap<>();
+        for (String key : seriesKeys) heat.put(key, askCountTracker.getWeightedHeat(key));
+        seriesKeys.sort((a, b) -> {
+            int byHeat = Double.compare(heat.get(b), heat.get(a));
+            if (byHeat != 0) return byHeat;
+            return Long.compare(salesOf(salesBySeriesName, b), salesOf(salesBySeriesName, a));
+        });
+
+        String top1Series = seriesKeys.get(0);
+        String top1Name = top1Series.contains("-")
+                ? top1Series.substring(top1Series.indexOf('-') + 1) : top1Series;
+
+        return "## 品牌咨询（" + classification.brand() + "）\n"
+                + "- 在售车系：" + seriesKeys.size() + " 个\n"
+                + "- 近期最热门：" + top1Name + "\n"
+                + "\n## 级别指令\n" + BRAND_INSTRUCTION;
+    }
+
+    /** 门店×车系销量表按车系全局求和（热度并列时的兜底排序数据源） */
+    private Map<String, Long> loadGlobalSales() {
+        Map<String, Long> sales = new HashMap<>();
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT series_name, SUM(sale_count) AS total FROM store_car_hot GROUP BY series_name");
+            for (Map<String, Object> row : rows) {
+                String name = String.valueOf(row.get("series_name"));
+                Number total = (Number) row.get("total");
+                if (name != null && total != null) sales.put(name, total.longValue());
+            }
+        } catch (Exception e) {
+            // 销量表不可用时静默降级为纯热度排序
+        }
+        return sales;
+    }
+
+    private static long salesOf(Map<String, Long> salesBySeriesName, String seriesKey) {
+        String series = seriesKey.contains("-")
+                ? seriesKey.substring(seriesKey.indexOf('-') + 1) : seriesKey;
+        return salesBySeriesName.getOrDefault(series, 0L);
     }
 
     // ---- SERIES 级：单一车系 ----

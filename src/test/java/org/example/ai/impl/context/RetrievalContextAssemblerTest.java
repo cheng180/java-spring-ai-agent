@@ -38,27 +38,36 @@ class RetrievalContextAssemblerTest {
 
     @Mock private HybridRetriever hybridRetriever;
     @Mock private VectorStore vectorStore;
+    @Mock private org.example.ai.knowledge.hotness.AskCountTracker askCountTracker;
 
     private File tmpDb;
+    private JdbcTemplate jdbc;
+    private DynamicKeywordBuilder keywordBuilder;
     private RetrievalContextAssembler assembler;
 
     @BeforeEach
     void setUp() {
-        // 分类器用空关键词表（SQLite 空表）——UNRESTRICTED 锚点用例不经关键词路径，
-        // SERIES 用例直接给实体，均不依赖关键词数据
+        // 分类器默认用空关键词表——UNRESTRICTED 锚点用例不经关键词路径，
+        // SERIES 用例直接给实体；BRAND 用例自行播种后 rebuildAssembler()
         tmpDb = new File(System.getProperty("java.io.tmpdir"), "test-assembler-" + UUID.randomUUID() + ".db");
         var ds = new SQLiteDataSource();
         ds.setUrl("jdbc:sqlite:" + tmpDb.getAbsolutePath());
-        var jdbc = new JdbcTemplate(ds);
+        jdbc = new JdbcTemplate(ds);
         jdbc.execute("CREATE TABLE car_sku (id INTEGER PRIMARY KEY, brand_name TEXT, series_name TEXT,"
                 + " sale_status INTEGER DEFAULT 1, is_deleted INTEGER DEFAULT 0)");
         jdbc.execute("CREATE TABLE entity_mapping (entity_id TEXT NOT NULL, display_name TEXT NOT NULL,"
                 + " aliases_json TEXT DEFAULT '[]', PRIMARY KEY (entity_id, display_name))");
-        var keywordBuilder = new DynamicKeywordBuilder(jdbc);
-        keywordBuilder.rebuild();
+        jdbc.execute("CREATE TABLE store_car_hot (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + " store_id INTEGER NOT NULL, series_name TEXT NOT NULL,"
+                + " sale_count INTEGER DEFAULT 0, inquiry_count INTEGER DEFAULT 0, stat_date DATE)");
+        keywordBuilder = new DynamicKeywordBuilder(jdbc);
+        rebuildAssembler();
+    }
 
+    private void rebuildAssembler() {
+        keywordBuilder.rebuild();
         assembler = new RetrievalContextAssembler(hybridRetriever, vectorStore,
-                new QueryLevelClassifier(keywordBuilder));
+                new QueryLevelClassifier(keywordBuilder), askCountTracker, jdbc);
     }
 
     @AfterEach
@@ -183,7 +192,55 @@ class RetrievalContextAssemblerTest {
         assertThat(ctx).contains("回退子块"); // 走了回退路径而非空上下文
     }
 
+    // ---- #25：BRAND 级分层（品牌问句） ----
+
+    @Test
+    @DisplayName("BRAND 级：品牌问句 → 只注入数量+top1+指令，零向量库调用")
+    void brandLevelInjectsMinimalContext() {
+        seedSku(1, "比亚迪", "宋PLUS DM-i");
+        seedSku(2, "比亚迪", "汉EV");
+        seedSku(3, "比亚迪", "海鸥");
+        rebuildAssembler();
+        when(askCountTracker.getWeightedHeat("比亚迪-宋PLUS DM-i")).thenReturn(9.0);
+        when(askCountTracker.getWeightedHeat("比亚迪-汉EV")).thenReturn(2.0);
+        when(askCountTracker.getWeightedHeat("比亚迪-海鸥")).thenReturn(5.0);
+
+        String ctx = assembler.retrieveContext("有比亚迪吗", List.of());
+
+        assertThat(ctx).contains("在售车系：3");
+        assertThat(ctx).contains("宋PLUS DM-i");                          // 热度 top1
+        assertThat(ctx).doesNotContain("汉EV").doesNotContain("海鸥");     // 不列其他车系
+        assertThat(ctx).contains("级别指令");
+        assertThat(ctx.length()).as("上下文长度上限").isLessThan(800);
+        verify(vectorStore, never()).similaritySearch(any(SearchRequest.class));
+        verify(hybridRetriever, never())
+                .search(anyString(), anyInt(), anyDouble(), any(Filter.Expression.class));
+    }
+
+    @Test
+    @DisplayName("BRAND 级：热度并列/全零 → 门店销量全局求和兜底排序")
+    void brandLevelFallsBackToSalesWhenHeatTied() {
+        seedSku(1, "比亚迪", "宋PLUS DM-i");
+        seedSku(2, "比亚迪", "汉EV");
+        rebuildAssembler();
+        // 热度全零（mock 默认值）；销量：汉EV 30 > 宋PLUS DM-i 10
+        jdbc.update("INSERT INTO store_car_hot (store_id, series_name, sale_count, stat_date)"
+                + " VALUES (1,'汉EV',30,date('now'))");
+        jdbc.update("INSERT INTO store_car_hot (store_id, series_name, sale_count, stat_date)"
+                + " VALUES (1,'宋PLUS DM-i',10,date('now'))");
+
+        String ctx = assembler.retrieveContext("比亚迪", List.of());
+
+        assertThat(ctx).contains("汉EV");      // 销量兜底 top1
+        assertThat(ctx).doesNotContain("宋PLUS"); // 其他车系不进上下文
+    }
+
     // ---- helpers ----
+
+    private void seedSku(long id, String brand, String series) {
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (?,?,?)",
+                id, brand, series);
+    }
 
     private static Document doc(String text, Map<String, Object> meta) {
         return new Document(text, new java.util.HashMap<>(meta));
