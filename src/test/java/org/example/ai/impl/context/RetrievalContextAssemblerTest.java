@@ -1,7 +1,10 @@
 package org.example.ai.impl.context;
 
+import org.example.ai.config.DynamicKeywordBuilder;
+import org.example.ai.impl.routing.QueryLevelClassifier;
 import org.example.ai.impl.search.HybridRetriever;
 import org.example.ai.knowledge.entity.ResolvedEntity;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -12,20 +15,23 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.sqlite.SQLiteDataSource;
 
+import java.io.File;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * RetrievalContextAssembler 黄金锚点测试（#23 ticket，预重构）。
+ * RetrievalContextAssembler 测试（#23 黄金锚点 + #24 车系级分层）。
  *
- * <p>锁定迁移前 CarSalesAgent.retrieveContext 的现状行为——未受限路径
- * （主路径全量展开 / 回退泛检索）必须字节级一致。后续分层检索（#24/#25/#26）
- * 新增级别分支时，这些用例是"现状零回归"的守卫。</p>
+ * <p>UNRESTRICTED 用例锁定迁移前现状行为（字节级零回归守卫）；
+ * SERIES 用例断言分层后的新行为（单系列父块 + 级别指令，零子块调用）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class RetrievalContextAssemblerTest {
@@ -33,11 +39,31 @@ class RetrievalContextAssemblerTest {
     @Mock private HybridRetriever hybridRetriever;
     @Mock private VectorStore vectorStore;
 
+    private File tmpDb;
     private RetrievalContextAssembler assembler;
 
     @BeforeEach
     void setUp() {
-        assembler = new RetrievalContextAssembler(hybridRetriever, vectorStore);
+        // 分类器用空关键词表（SQLite 空表）——UNRESTRICTED 锚点用例不经关键词路径，
+        // SERIES 用例直接给实体，均不依赖关键词数据
+        tmpDb = new File(System.getProperty("java.io.tmpdir"), "test-assembler-" + UUID.randomUUID() + ".db");
+        var ds = new SQLiteDataSource();
+        ds.setUrl("jdbc:sqlite:" + tmpDb.getAbsolutePath());
+        var jdbc = new JdbcTemplate(ds);
+        jdbc.execute("CREATE TABLE car_sku (id INTEGER PRIMARY KEY, brand_name TEXT, series_name TEXT,"
+                + " sale_status INTEGER DEFAULT 1, is_deleted INTEGER DEFAULT 0)");
+        jdbc.execute("CREATE TABLE entity_mapping (entity_id TEXT NOT NULL, display_name TEXT NOT NULL,"
+                + " aliases_json TEXT DEFAULT '[]', PRIMARY KEY (entity_id, display_name))");
+        var keywordBuilder = new DynamicKeywordBuilder(jdbc);
+        keywordBuilder.rebuild();
+
+        assembler = new RetrievalContextAssembler(hybridRetriever, vectorStore,
+                new QueryLevelClassifier(keywordBuilder));
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (tmpDb != null && tmpDb.exists()) tmpDb.delete();
     }
 
     // ---- 现状锚点 1：主路径（命中车系 → 父块 + 子块全量展开） ----
@@ -117,27 +143,44 @@ class RetrievalContextAssemblerTest {
         verify(vectorStore, never()).similaritySearch(any(SearchRequest.class));
     }
 
-    // ---- 现状锚点 3：EntityResolver 命中车系的父块补充 ----
+    // ---- #24：SERIES 级分层（单车系命中） ----
 
     @Test
-    @DisplayName("EntityResolver 命中但父块检索未召回 → 按 series_id 补充父块")
-    void entityHitSupplementsParent() {
-        when(hybridRetriever.search(anyString(), eq(3), eq(0.6), any(Filter.Expression.class)))
-                .thenReturn(new java.util.ArrayList<>()); // 相似度没搜到
-
+    @DisplayName("SERIES 级：单车系命中 → 只注入完整父块+级别指令，零子块调用")
+    void seriesLevelInjectsParentOnlyWithInstruction() {
         ResolvedEntity re = new ResolvedEntity(
                 "entity:car:比亚迪:汉ev", "比亚迪-汉EV", "比亚迪", "汉EV");
-        Document parent = doc("【比亚迪 汉EV】车系信息", Map.of("series_id", "比亚迪-汉EV"));
-        Document child = doc("汉EV 车源", Map.of("sku_id", 9L));
-        // 补充父块查询 + 子块展开查询
-        when(vectorStore.similaritySearch(any(SearchRequest.class)))
-                .thenReturn(List.of(parent))
-                .thenReturn(List.of(child));
+        Document parent = doc("【比亚迪 汉EV】车系信息\n在售车型：1款",
+                Map.of("series_id", "比亚迪-汉EV"));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(parent));
 
-        String ctx = assembler.retrieveContext("汉EV", List.of(re));
+        // "怎么样"不在细节词表 → 走车系级摘要
+        String ctx = assembler.retrieveContext("汉EV怎么样", List.of(re));
 
         assertThat(ctx).contains("## 匹配车系").contains("【比亚迪 汉EV】车系信息");
-        assertThat(ctx).contains("## 在售车型").contains("- 汉EV 车源");
+        assertThat(ctx).contains("级别指令");
+        assertThat(ctx).doesNotContain("## 在售车型"); // 零子块
+        verify(hybridRetriever, never())
+                .search(anyString(), anyInt(), anyDouble(), any(Filter.Expression.class));
+        verify(vectorStore, times(1)).similaritySearch(any(SearchRequest.class));
+    }
+
+    @Test
+    @DisplayName("SERIES 级父块缺失（下架车系）→ 降级回退泛检索，绝不注入空上下文")
+    void seriesLevelFallsBackWhenParentMissing() {
+        ResolvedEntity re = new ResolvedEntity(
+                "entity:car:某品牌:已下架车系", "某品牌-已下架车系", "某品牌", "已下架车系");
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        Document child = doc("回退子块", Map.of("level", "child"));
+        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of());
+
+        String ctx = assembler.retrieveContext("已下架车系", List.of(re));
+
+        assertThat(ctx).contains("回退子块"); // 走了回退路径而非空上下文
     }
 
     // ---- helpers ----
