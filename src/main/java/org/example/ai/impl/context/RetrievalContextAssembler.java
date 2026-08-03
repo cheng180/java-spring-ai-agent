@@ -73,31 +73,32 @@ public class RetrievalContextAssembler {
         this.jdbc = jdbc;
     }
 
-    public String retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries) {
+    /**
+     * 组装结果：上下文文本 + 粒度分类结果。
+     * 分类结果随上下文返回，供对话日志记录级别归因
+     * （《回复过长问题解决评估文档》加固建议 1：上线后可排查"该给细节却给了摘要"）。
+     */
+    public record Result(String context, QueryClassification classification) {}
+
+    public Result retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries) {
         // ---- 粒度分类（#24） ----
         QueryClassification classification = classifier.classify(userMessage, matchedSeries);
 
+        String ctx;
         if (classification.level() == QueryLevel.BRAND) {
-            String ctx = assembleBrandContext(classification);
-            if (ctx != null) return ctx;
-            // 品牌无任何在售车系数据（如索引刷新窗口期）→ 降级回退泛检索
-            return fallbackContext(userMessage);
+            ctx = assembleBrandContext(classification);
+            if (ctx == null) ctx = fallbackContext(userMessage); // 品牌无在售车系数据 → 降级回退
+        } else if (classification.level() == QueryLevel.FAMILY) {
+            ctx = assembleFamilyContext(classification);
+            if (ctx == null) ctx = fallbackContext(userMessage); // 父块全部缺失 → 降级回退
+        } else if (classification.level() == QueryLevel.SERIES) {
+            ctx = assembleSeriesContext(classification);
+            if (ctx == null) ctx = fallbackContext(userMessage); // 父块缺失 → 降级回退
+        } else {
+            // ---- UNRESTRICTED：现状行为 ----
+            ctx = assembleUnrestrictedContext(userMessage, matchedSeries);
         }
-        if (classification.level() == QueryLevel.FAMILY) {
-            String ctx = assembleFamilyContext(classification);
-            if (ctx != null) return ctx;
-            // 命中车系的父块全部取不到 → 降级回退泛检索，绝不注入空上下文
-            return fallbackContext(userMessage);
-        }
-        if (classification.level() == QueryLevel.SERIES) {
-            String ctx = assembleSeriesContext(classification);
-            if (ctx != null) return ctx;
-            // 命中车系的父块取不到（如下架车系实体残留）→ 降级回退泛检索，绝不注入空上下文
-            return fallbackContext(userMessage);
-        }
-
-        // ---- UNRESTRICTED：现状行为（FAMILY 分支后续 ticket 接入） ----
-        return assembleUnrestrictedContext(userMessage, matchedSeries);
+        return new Result(ctx, classification);
     }
 
     // ---- BRAND 级：品牌问句 ----

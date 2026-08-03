@@ -92,7 +92,7 @@ class RetrievalContextAssemblerTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class)))
                 .thenReturn(List.of(child1, child2));
 
-        String ctx = assembler.retrieveContext("有比亚迪宋吗", List.of());
+        String ctx = assembler.retrieveContext("有比亚迪宋吗", List.of()).context();
 
         // 字节级黄金输出：段标题、顺序、前缀格式全部锁定
         assertThat(ctx).isEqualTo(
@@ -118,7 +118,7 @@ class RetrievalContextAssemblerTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class)))
                 .thenReturn(List.of(dup1, dup2, other));
 
-        String ctx = assembler.retrieveContext("宋PLUS", List.of());
+        String ctx = assembler.retrieveContext("宋PLUS", List.of()).context();
 
         assertThat(ctx).contains("同一车源").doesNotContain("重复召回");
         assertThat(ctx).contains("另一车源");
@@ -140,7 +140,7 @@ class RetrievalContextAssemblerTest {
         when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
                 .thenReturn(List.of(kb));
 
-        String ctx = assembler.retrieveContext("买车要注意什么", List.of());
+        String ctx = assembler.retrieveContext("买车要注意什么", List.of()).context();
 
         // 现状行为：无父块段时上下文以换行开头（字节级保留）
         assertThat(ctx).isEqualTo(
@@ -164,7 +164,7 @@ class RetrievalContextAssemblerTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(parent));
 
         // "怎么样"不在细节词表 → 走车系级摘要
-        String ctx = assembler.retrieveContext("汉EV怎么样", List.of(re));
+        String ctx = assembler.retrieveContext("汉EV怎么样", List.of(re)).context();
 
         assertThat(ctx).contains("## 匹配车系").contains("【比亚迪 汉EV】车系信息");
         assertThat(ctx).contains("级别指令");
@@ -187,7 +187,7 @@ class RetrievalContextAssemblerTest {
         when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
                 .thenReturn(List.of());
 
-        String ctx = assembler.retrieveContext("已下架车系", List.of(re));
+        String ctx = assembler.retrieveContext("已下架车系", List.of(re)).context();
 
         assertThat(ctx).contains("回退子块"); // 走了回退路径而非空上下文
     }
@@ -205,7 +205,13 @@ class RetrievalContextAssemblerTest {
         when(askCountTracker.getWeightedHeat("比亚迪-汉EV")).thenReturn(2.0);
         when(askCountTracker.getWeightedHeat("比亚迪-海鸥")).thenReturn(5.0);
 
-        String ctx = assembler.retrieveContext("有比亚迪吗", List.of());
+        RetrievalContextAssembler.Result result = assembler.retrieveContext("有比亚迪吗", List.of());
+        String ctx = result.context();
+
+        // Result 契约：分类结果随上下文返回（对话日志级别归因依赖它）
+        assertThat(result.classification().level())
+                .isEqualTo(org.example.ai.impl.routing.QueryLevel.BRAND);
+        assertThat(result.classification().brand()).isEqualTo("比亚迪");
 
         assertThat(ctx).contains("在售车系：3");
         assertThat(ctx).contains("宋PLUS DM-i");                          // 热度 top1
@@ -229,7 +235,7 @@ class RetrievalContextAssemblerTest {
         jdbc.update("INSERT INTO store_car_hot (store_id, series_name, sale_count, stat_date)"
                 + " VALUES (1,'宋PLUS DM-i',10,date('now'))");
 
-        String ctx = assembler.retrieveContext("比亚迪", List.of());
+        String ctx = assembler.retrieveContext("比亚迪", List.of()).context();
 
         assertThat(ctx).contains("汉EV");      // 销量兜底 top1
         assertThat(ctx).doesNotContain("宋PLUS"); // 其他车系不进上下文
@@ -258,7 +264,7 @@ class RetrievalContextAssemblerTest {
                 .thenReturn(List.of(qinPlus));
 
         String ctx = assembler.retrieveContext("比亚迪秦",
-                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i")));
+                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i"))).context();
 
         assertThat(ctx).contains("价格区间：10.00万 ~ 14.00万");  // 摘要保留
         assertThat(ctx).contains("价格区间：8.00万 ~ 12.00万");
@@ -286,7 +292,7 @@ class RetrievalContextAssemblerTest {
                 .thenReturn(List.of());
 
         String ctx = assembler.retrieveContext("比亚迪秦",
-                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i")));
+                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i"))).context();
 
         assertThat(ctx).contains("秦L 2026款"); // 锚点未命中 → 保留全文，不做半截截断
     }
@@ -307,7 +313,7 @@ class RetrievalContextAssemblerTest {
                 .thenReturn(List.of());
 
         String ctx = assembler.retrieveContext("比亚迪秦",
-                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i")));
+                List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i"))).context();
 
         assertThat(ctx).contains("回退子块"); // 走了回退路径而非空上下文
     }
@@ -327,7 +333,7 @@ class RetrievalContextAssemblerTest {
         when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
                 .thenReturn(List.of());
 
-        String ctx = assembler.retrieveContext("比亚迪", four);
+        String ctx = assembler.retrieveContext("比亚迪", four).context();
 
         assertThat(ctx).contains("回退子块"); // 降级回退而非越界异常
     }

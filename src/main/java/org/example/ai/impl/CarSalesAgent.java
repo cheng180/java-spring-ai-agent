@@ -2,6 +2,7 @@ package org.example.ai.impl;
 
 import org.example.ai.impl.context.RetrievalContextAssembler;
 import org.example.ai.impl.prompt.PromptTemplates;
+import org.example.ai.impl.routing.QueryClassification;
 import org.example.ai.impl.tool.CarSalesTools;
 import org.example.ai.config.DynamicKeywordBuilder;
 import org.example.ai.knowledge.entity.EntityResolver;
@@ -135,6 +136,7 @@ public class CarSalesAgent implements ChatService {
         boolean isIdle = isIdleChat(userMessage) && matchedSeries.isEmpty();
         boolean terminated = false;
         String response;
+        QueryClassification classification = null;
 
         if (isIdle) {
             idleCount = idleCounters.merge(userId, 1, Integer::sum);
@@ -164,7 +166,10 @@ public class CarSalesAgent implements ChatService {
                 response = route.followUpText();
             } else {
                 // EXACT / null → 走两阶段检索（#4 ticket）
-                String ragContext = contextAssembler.retrieveContext(userMessage, matchedSeries);
+                RetrievalContextAssembler.Result assembled =
+                        contextAssembler.retrieveContext(userMessage, matchedSeries);
+                classification = assembled.classification();
+                String ragContext = assembled.context();
 
                 // VAGUE + needsInference → 追问文本注入 system prompt
                 if (route != null && route.needsInference() && route.followUpText() != null) {
@@ -180,7 +185,8 @@ public class CarSalesAgent implements ChatService {
             }
         }
 
-        logConversation(userId, userMessage, response, idleCount, isIdle, terminated, matchedSeries);
+        logConversation(userId, userMessage, response, idleCount, isIdle, terminated,
+                matchedSeries, classification);
         return response;
     }
 
@@ -242,15 +248,22 @@ public class CarSalesAgent implements ChatService {
 
     private void logConversation(String userId, String userMessage, String response,
                                   int idleCount, boolean isIdle, boolean terminated,
-                                  List<ResolvedEntity> matchedSeries) {
+                                  List<ResolvedEntity> matchedSeries,
+                                  QueryClassification classification) {
         String matchedJson = matchedSeries.stream()
                 .map(ResolvedEntity::displayName)
                 .map(this::escapeJson)
                 .collect(Collectors.joining("\",\"", "[\"", "\"]"));
+        // 分类级别归因（《回复过长问题解决评估文档》加固建议 1）：
+        // NONE=闲聊/未分级；BRAND/FAMILY/SERIES/UNRESTRICTED 见 QueryLevel
+        String level = classification == null ? "NONE" : classification.level().name();
+        String levelBrand = classification == null || classification.brand() == null
+                ? "" : classification.brand();
         String json = String.format(
-                "{\"ts\":\"%s\",\"userId\":\"%s\",\"msg\":%s,\"reply\":%s,\"idleCount\":%d,\"isIdle\":%b,\"terminated\":%b,\"matched\":%s}",
+                "{\"ts\":\"%s\",\"userId\":\"%s\",\"msg\":%s,\"reply\":%s,\"idleCount\":%d,\"isIdle\":%b,\"terminated\":%b,\"matched\":%s,\"level\":\"%s\",\"levelBrand\":%s}",
                 Instant.now().toString(), escapeJson(userId), escapeJson(userMessage),
-                escapeJson(response != null ? response : ""), idleCount, isIdle, terminated, matchedJson);
+                escapeJson(response != null ? response : ""), idleCount, isIdle, terminated,
+                matchedJson, level, escapeJson(levelBrand));
         log.info(json);
     }
 
@@ -275,7 +288,8 @@ public class CarSalesAgent implements ChatService {
             idleCount = idleCounters.merge(userId, 1, Integer::sum);
             if (idleCount > IDLE_CHAT_LIMIT) {
                 terminated = true;
-                logConversation(userId, userMessage, IDLE_TERMINATION, idleCount, true, true, matchedSeries);
+                logConversation(userId, userMessage, IDLE_TERMINATION, idleCount, true, true,
+                        matchedSeries, null);
                 return Flux.just(IDLE_TERMINATION);
             }
         } else {
@@ -286,18 +300,22 @@ public class CarSalesAgent implements ChatService {
             }
         }
 
-        logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated, matchedSeries);
-
         // VagueQueryRouter 路由（#13 ticket）
         String historyText = buildHistoryText(userId);
         MatchResult route = router.route(userMessage, historyText, userIp);
 
         if (route != null && route.needsConfirm()) {
+            logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated,
+                    matchedSeries, null);
             return Flux.just(route.followUpText());
         }
 
-        // 两阶段检索（#4 ticket）
-        String ragContext = contextAssembler.retrieveContext(userMessage, matchedSeries);
+        // 两阶段检索（#4 ticket）——日志在检索后记录，携带分类级别归因
+        RetrievalContextAssembler.Result assembled =
+                contextAssembler.retrieveContext(userMessage, matchedSeries);
+        logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated,
+                matchedSeries, assembled.classification());
+        String ragContext = assembled.context();
         if (route != null && route.needsInference() && route.followUpText() != null) {
             ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
         }
