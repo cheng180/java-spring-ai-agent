@@ -1,9 +1,10 @@
 package org.example.ai.impl.tool;
 
 import org.example.ai.config.DynamicKeywordBuilder;
-import org.example.ai.impl.location.GeoLocator;
+import org.example.ai.impl.location.GeoLocation;
 import org.example.ai.impl.location.HotCar;
 import org.example.ai.impl.location.HotCarRepository;
+import org.example.ai.impl.location.PositionStackGeoLocator;
 import org.example.ai.impl.location.StoreInfo;
 import org.example.ai.impl.location.StoreLocator;
 import org.slf4j.Logger;
@@ -26,15 +27,15 @@ public class CarSalesTools {
     private static final Logger log = LoggerFactory.getLogger(CarSalesTools.class);
     private final JdbcTemplate jdbc;
     private final StoreLocator storeLocator;
-    private final GeoLocator geoLocator;
+    private final PositionStackGeoLocator geocoder;
     private final DynamicKeywordBuilder keywordBuilder;
     private final HotCarRepository hotCarRepo;
 
-    public CarSalesTools(JdbcTemplate jdbc, StoreLocator storeLocator, GeoLocator geoLocator,
+    public CarSalesTools(JdbcTemplate jdbc, StoreLocator storeLocator, PositionStackGeoLocator geocoder,
                          DynamicKeywordBuilder keywordBuilder, HotCarRepository hotCarRepo) {
         this.jdbc = jdbc;
         this.storeLocator = storeLocator;
-        this.geoLocator = geoLocator;
+        this.geocoder = geocoder;
         this.keywordBuilder = keywordBuilder;
         this.hotCarRepo = hotCarRepo;
     }
@@ -101,39 +102,46 @@ public class CarSalesTools {
     }
 
     /**
-     * 获取门店信息（按用户位置距离排序，最近的门店排前面）。
+     * 按城市返回距离最近的一家门店（#16 ticket）。
+     * region LIKE 命中优先；未命中走 positionstack 地理编码 → Haversine 最近门店兜底；仍无则提示未找到。
+     * 只返回一家门店（微信短消息约束）。
      */
     @org.springframework.ai.tool.annotation.Tool(description = """
-        获取公司所有门店的地址、电话、营业时间。当用户问"你们在哪""门店地址""联系方式"时调用。
-        返回按距离排序的门店列表，最近门店排在最前面。
+        按城市返回距离最近的一家门店的地址、电话、营业时间。
+        当用户问"你们在哪""门店地址""最近的店""联系方式"时调用。
+        必须传入用户所在城市 city；如果还不知道用户城市，先反问用户所在城市，不要凭空猜测。
+        只返回最近的一家门店，不返回列表。
         """)
-    public String getStoreInfo() {
-        log.info("Tool调用: getStoreInfo()");
+    public String getStoreInfo(String city) {
+        log.info("Tool调用: getStoreInfo('{}')", city);
 
-        var loc = geoLocator.locate(null);
-        List<StoreInfo> stores;
+        if (city == null || city.isBlank()) {
+            return "请先告诉我您所在的城市，我帮您查最近的门店～";
+        }
+
+        // 1. region LIKE 命中 → 返回第一家
+        StoreInfo regionMatch = storeLocator.findByRegion(city);
+        if (regionMatch != null) {
+            return formatStore(regionMatch);
+        }
+
+        // 2. positionstack 地理编码兜底 → 最近门店
+        GeoLocation loc = geocoder.locateByCity(city);
         if (loc != null) {
-            stores = storeLocator.findAllWithDistance(loc.lat(), loc.lng());
-        } else {
-            // 无法定位时回退到原始顺序
-            stores = storeLocator.findAllActiveRaw();
+            StoreInfo nearest = storeLocator.findNearest(loc.lat(), loc.lng());
+            if (nearest != null) {
+                return formatStore(nearest);
+            }
         }
 
-        if (stores.isEmpty()) return "暂无门店信息。";
+        // 3. 仍无
+        return "未找到该城市的门店，请确认城市名";
+    }
 
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < stores.size(); i++) {
-            StoreInfo s = stores.get(i);
-            double km = loc != null
-                    ? StoreLocator.haversineKm(loc.lat(), loc.lng(), s.latitude(), s.longitude())
-                    : 0;
-            sb.append(String.format("【%s】%s %s\n地址：%s\n电话：%s\n营业时间：%s",
-                    s.storeName(), s.region(),
-                    km > 0 ? String.format("（距您约 %.1f 公里）", km) : "",
-                    s.address(), s.phone(), s.workingHours()));
-            sb.append("\n\n");
-        }
-        return sb.toString();
+    /** 单店展示格式（#16：只返回一家）。 */
+    private String formatStore(StoreInfo s) {
+        return String.format("离您最近的是【%s】%s\n地址：%s\n电话：%s\n营业时间：%s",
+                s.storeName(), s.region(), s.address(), s.phone(), s.workingHours());
     }
 
     /**

@@ -377,7 +377,7 @@ retrieveContext(userMessage, matchedSeries):
            └── 三 Collection / 蓝绿 → 暂缓
 
 建议下一步 → 阶段二（IP定位 + 门店匹配 + 动态热度）
-           ├── GeoLocator 接口（先假数据，后期换高德 API）
+           ├── GeoLocator 接口（先假数据，后期换 IP 定位服务）
            ├── StoreLocator（Haversine 最近门店）
            ├── HotCarRepository（门店×车系热度）
            └── DynamicKeywordBuilder（从 entity_mapping 构建关键词表）
@@ -413,7 +413,7 @@ retrieveContext(userMessage, matchedSeries):
 
 | Ticket | 组件 | 说明 |
 |--------|------|------|
-| GeoLocator | `location/GeoLocator.java` 接口 | IP→经纬度，先返回固定值（杭州未来科技城），后期换高德 API |
+| GeoLocator | `location/GeoLocator.java` 接口 | IP→经纬度，先返回固定值（杭州未来科技城），后期换 IP 定位服务 |
 | StoreLocator | `location/StoreLocator.java` | Haversine 公式最近门店，读 `store_config` 表 |
 | HotCarRepository | `location/HotCarRepository.java` | 门店×车系热度，先读 `store_car_hot` 假数据 |
 | DynamicKeywordBuilder | `config/DynamicKeywordBuilder.java` | 启动时从 `entity_mapping` + `car_sku` 构建动态关键词表，新增车系不需改代码 |

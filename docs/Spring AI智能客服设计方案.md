@@ -1002,6 +1002,7 @@ public class CarSalesTools {
 ```
 
 **配置**：`positionstack.api-key=${POSITIONSTACK_API_KEY}`，真实 key 走环境变量注入，不进仓库（仓库 public，与 `${DASHSCOPE_API_KEY}` 同约定）。未配置 key 或调用失败时 `locateByCity` 返回 null，工具降级为"未找到该城市的门店"。
+
 ### 8.4 动态 System Prompt 注入
 
 ```java

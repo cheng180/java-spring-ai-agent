@@ -85,6 +85,19 @@ public class StoreLocator {
         return EARTH_RADIUS_KM * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
 
+    /**
+     * 按 region 模糊匹配第一家活跃门店（#16：getStoreInfo(city) 首选路径）。
+     *
+     * @param city 城市名
+     * @return region 命中的第一家活跃门店；无匹配返回 null
+     */
+    public StoreInfo findByRegion(String city) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT * FROM store_config WHERE region LIKE ? AND is_active = 1 ORDER BY id LIMIT 1",
+                "%" + city + "%");
+        return rows.isEmpty() ? null : toStoreInfo(rows.get(0));
+    }
+
     // ---- 内部 ----
 
     private List<StoreInfo> findAllActive() {
@@ -92,20 +105,24 @@ public class StoreLocator {
                 "SELECT * FROM store_config WHERE is_active = 1 ORDER BY id");
         List<StoreInfo> stores = new ArrayList<>();
         for (Map<String, Object> r : rows) {
-            stores.add(new StoreInfo(
-                    ((Number) r.get("id")).intValue(),
-                    str(r.get("store_name")),
-                    str(r.get("store_code")),
-                    str(r.get("address")),
-                    str(r.get("phone")),
-                    str(r.get("working_hours")),
-                    str(r.get("region")),
-                    toDouble(r.get("latitude")),
-                    toDouble(r.get("longitude")),
-                    ((Number) r.get("is_active")).intValue() == 1
-            ));
+            stores.add(toStoreInfo(r));
         }
         return stores;
+    }
+
+    private StoreInfo toStoreInfo(Map<String, Object> r) {
+        return new StoreInfo(
+                ((Number) r.get("id")).intValue(),
+                str(r.get("store_name")),
+                str(r.get("store_code")),
+                str(r.get("address")),
+                str(r.get("phone")),
+                str(r.get("working_hours")),
+                str(r.get("region")),
+                toDouble(r.get("latitude")),
+                toDouble(r.get("longitude")),
+                ((Number) r.get("is_active")).intValue() == 1
+        );
     }
 
     private String str(Object o) { return o == null ? "" : o.toString(); }
