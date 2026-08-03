@@ -78,7 +78,10 @@ public class RetrievalContextAssembler {
         QueryClassification classification = classifier.classify(userMessage, matchedSeries);
 
         if (classification.level() == QueryLevel.BRAND) {
-            return assembleBrandContext(classification);
+            String ctx = assembleBrandContext(classification);
+            if (ctx != null) return ctx;
+            // 品牌无任何在售车系数据（如索引刷新窗口期）→ 降级回退泛检索
+            return fallbackContext(userMessage);
         }
         if (classification.level() == QueryLevel.FAMILY) {
             String ctx = assembleFamilyContext(classification);
@@ -101,6 +104,7 @@ public class RetrievalContextAssembler {
 
     private String assembleBrandContext(QueryClassification classification) {
         List<String> seriesKeys = new ArrayList<>(new LinkedHashSet<>(classification.seriesKeys()));
+        if (seriesKeys.isEmpty()) return null;
 
         // 排序：询问热度为主，并列/全零时用门店销量全局求和兜底（冷启动首日即有合理推荐）
         Map<String, Long> salesBySeriesName = loadGlobalSales();

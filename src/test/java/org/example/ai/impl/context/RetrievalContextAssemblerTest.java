@@ -312,6 +312,26 @@ class RetrievalContextAssemblerTest {
         assertThat(ctx).contains("回退子块"); // 走了回退路径而非空上下文
     }
 
+    @Test
+    @DisplayName("BRAND 级：品牌无在售车系数据 → 降级回退泛检索（防越界）")
+    void brandLevelFallsBackWhenNoSeriesData() {
+        // 空关键词表 + 4 个同品牌实体 → 分类器判 BRAND（size>3），但 seriesKeys 为空
+        // （模拟 entity_mapping 与关键词表刷新窗口期的瞬时不一致）
+        List<org.example.ai.knowledge.entity.ResolvedEntity> four = List.of(
+                entity("比亚迪", "车系A"), entity("比亚迪", "车系B"),
+                entity("比亚迪", "车系C"), entity("比亚迪", "车系D"));
+
+        Document child = doc("回退子块", Map.of("level", "child"));
+        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of());
+
+        String ctx = assembler.retrieveContext("比亚迪", four);
+
+        assertThat(ctx).contains("回退子块"); // 降级回退而非越界异常
+    }
+
     // ---- helpers ----
 
     private void seedSku(long id, String brand, String series) {
