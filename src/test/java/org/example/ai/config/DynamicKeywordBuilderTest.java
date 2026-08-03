@@ -178,4 +178,28 @@ class DynamicKeywordBuilderTest {
         builder.rebuild();
         assertThat(builder.getSeriesKeys("不存在的品牌")).isEmpty();
     }
+
+    @Test
+    @DisplayName("非在售车源（sale_status != 1）不进关键词表")
+    void offSaleSkusExcluded() {
+        // sale_status: 0=下架, 2=已售等非在售状态
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (1,'阿维塔','阿维塔07',0)");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (2,'阿维塔','阿维塔12',2)");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (3,'比亚迪','海鸥',1)");
+
+        // 完整链路：entity_mapping 也从 car_sku 构建，关键词表第 1 步从中读别名——
+        // 两处都必须过滤，否则下架车系经 entity_mapping 传播回关键词表
+        new DatabaseInitializer(jdbc).rebuildEntityMapping();
+        builder.rebuild();
+
+        // 下架车系不产生关键词（否则品牌摘要会宣称"阿维塔有库存"，踩幻觉红线）
+        assertThat(builder.containsAnyKeyword("阿维塔07")).isFalse();
+        assertThat(builder.allKeywords()).noneMatch(k -> k.contains("阿维塔"));
+        // entity_mapping 同样不含下架车系
+        Integer mappings = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM entity_mapping WHERE display_name LIKE '%阿维塔%'", Integer.class);
+        assertThat(mappings).isZero();
+        // 在售车系不受影响
+        assertThat(builder.containsAnyKeyword("海鸥")).isTrue();
+    }
 }

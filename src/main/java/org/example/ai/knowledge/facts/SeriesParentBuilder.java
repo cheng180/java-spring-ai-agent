@@ -20,6 +20,14 @@ public class SeriesParentBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(SeriesParentBuilder.class);
 
+    /**
+     * 父块文本中"在售款型"段的标题锚点。
+     *
+     * <p>契约：该锚点在父块文本中出现且只出现一次（见 SeriesParentBuilderTest 契约测试）。
+     * 下游分层检索（车系族级）按此锚点截断车型清单段——修改父块格式时必须保证锚点不破。</p>
+     */
+    public static final String MODELS_SECTION = "在售款型：";
+
     private final JdbcTemplate jdbc;
     private final SkuFactExtractor skuFactExtractor;
     private final AskCountTracker askCountTracker;
@@ -135,7 +143,7 @@ public class SeriesParentBuilder {
         if (!colors.isEmpty()) sb.append("可选颜色：").append(String.join("、", colors)).append("\n");
 
         // 车型列表（最多列5款）
-        sb.append("在售款型：\n");
+        sb.append(MODELS_SECTION).append("\n");
         rows.stream().limit(5).forEach(r -> {
             sb.append("  - ").append(String.valueOf(r.get("model_name")));
             if (r.get("sale_price") != null) {

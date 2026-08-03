@@ -71,15 +71,16 @@ public class DynamicKeywordBuilder implements InitializingBean {
             }
         }
 
-        // 2. 从 car_sku 补充品牌名和车系名
+        // 2. 从 car_sku 补充品牌名和车系名（仅在售，下架车系不进关键词表——
+        //    否则品牌级摘要会宣称无库存品牌"有库存"，踩幻觉红线）
         List<Map<String, Object>> brands = jdbc.queryForList(
-                "SELECT DISTINCT brand_name FROM car_sku WHERE is_deleted = 0");
+                "SELECT DISTINCT brand_name FROM car_sku WHERE is_deleted = 0 AND sale_status = 1");
         for (Map<String, Object> row : brands) {
             String brand = str(row.get("brand_name"));
             if (!brand.isBlank()) {
                 // 品牌名关联到该品牌下所有车系
                 List<Map<String, Object>> seriesList = jdbc.queryForList(
-                        "SELECT DISTINCT brand_name, series_name FROM car_sku WHERE brand_name = ? AND is_deleted = 0",
+                        "SELECT DISTINCT brand_name, series_name FROM car_sku WHERE brand_name = ? AND is_deleted = 0 AND sale_status = 1",
                         brand);
                 for (Map<String, Object> s : seriesList) {
                     String sk = str(s.get("brand_name")) + "-" + str(s.get("series_name"));
@@ -89,7 +90,7 @@ public class DynamicKeywordBuilder implements InitializingBean {
         }
         // 车系名（独立关键词）
         List<Map<String, Object>> series = jdbc.queryForList(
-                "SELECT DISTINCT brand_name, series_name FROM car_sku WHERE is_deleted = 0");
+                "SELECT DISTINCT brand_name, series_name FROM car_sku WHERE is_deleted = 0 AND sale_status = 1");
         for (Map<String, Object> row : series) {
             String sName = str(row.get("series_name"));
             if (!sName.isBlank()) {

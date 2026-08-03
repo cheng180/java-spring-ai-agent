@@ -128,6 +128,22 @@ class SeriesParentBuilderTest {
     }
 
     @Test
+    @DisplayName("截断锚点契约：MODELS_SECTION 在父块文本中出现且唯一")
+    void modelsSectionAnchorContract() {
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, model_name, outer_color_name, guide_price, sale_price, spec_name, energy_type, owner_name, sale_status) VALUES (1,'比亚迪','宋PLUS DM-i','宋PLUS DM-i 旗舰','雪域白','16.98万',15880000,'中规',2,'杭州',1)");
+
+        AtomicFact parent = parentBuilder.buildParent("比亚迪", "宋PLUS DM-i");
+        assertThat(parent).isNotNull();
+        String content = parent.getContent();
+
+        // 下游分层检索按此锚点截断"在售款型"段——锚点缺失或不唯一都会让截断悄悄失效
+        int first = content.indexOf(SeriesParentBuilder.MODELS_SECTION);
+        assertThat(first).as("父块文本包含截断锚点").isGreaterThanOrEqualTo(0);
+        assertThat(content.indexOf(SeriesParentBuilder.MODELS_SECTION, first + 1))
+                .as("截断锚点只出现一次").isEqualTo(-1);
+    }
+
+    @Test
     @DisplayName("父块构建：无在售车源时返回 null")
     void buildParentReturnsNullForEmpty() {
         AtomicFact parent = parentBuilder.buildParent("不存在的品牌", "不存在的车系");

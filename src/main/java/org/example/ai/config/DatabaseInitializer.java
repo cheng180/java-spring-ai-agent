@@ -312,9 +312,10 @@ public class DatabaseInitializer implements CommandLineRunner {
         // 清空重建（幂等）
         jdbc.update("DELETE FROM entity_mapping");
 
-        // 从 car_sku 提取所有唯一的 brand_name + series_name 组合
+        // 从 car_sku 提取所有唯一的 brand_name + series_name 组合（仅在售——
+        // 下架车系不进实体映射，避免别名/关键词链路宣称无库存车系存在）
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT DISTINCT brand_name, series_name FROM car_sku WHERE is_deleted = 0 ORDER BY brand_name, series_name");
+                "SELECT DISTINCT brand_name, series_name FROM car_sku WHERE is_deleted = 0 AND sale_status = 1 ORDER BY brand_name, series_name");
 
         String insertSql = "INSERT INTO entity_mapping (entity_id, display_name, aliases_json) VALUES (?, ?, ?)";
         int inserted = 0;
