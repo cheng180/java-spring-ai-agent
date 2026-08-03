@@ -24,16 +24,19 @@ public class EntityResolver {
     private static final Logger log = LoggerFactory.getLogger(EntityResolver.class);
 
     private final ConcurrentMap<String, ResolvedEntity> aliasIndex = new ConcurrentHashMap<>();
+    private final JdbcTemplate jdbc;
 
     public EntityResolver(JdbcTemplate jdbc) {
-        rebuild(jdbc);
+        this.jdbc = jdbc;
+        rebuild();
         log.info("EntityResolver 初始化完成：{} 个别名索引", aliasIndex.size());
     }
 
     /**
-     * 重建别名索引（每次重启全量重做）。
+     * 重建别名索引。启动时由构造函数构建；车源变更广播处理后由更新链路
+     * （InMemoryIndexRefresher）再次调用，新车系无需重启即可被识别。
      */
-    void rebuild(JdbcTemplate jdbc) {
+    public void rebuild() {
         ConcurrentMap<String, ResolvedEntity> newIndex = new ConcurrentHashMap<>();
 
         List<Map<String, Object>> rows = jdbc.queryForList("SELECT * FROM entity_mapping ORDER BY display_name");

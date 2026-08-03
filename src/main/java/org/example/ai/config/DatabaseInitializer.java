@@ -50,7 +50,7 @@ public class DatabaseInitializer implements CommandLineRunner {
         log.info("car_sku: 启动前 {} 条，启动后 {} 条（新增 {} 条）", before, after, after - before);
 
         // 实体映射每次启动都刷新（基于当前 car_sku 数据重建）
-        seedEntityMapping();
+        rebuildEntityMapping();
     }
 
     private void createTables() {
@@ -301,9 +301,12 @@ public class DatabaseInitializer implements CommandLineRunner {
      * 从 car_sku 的去重 brand_name + series_name 构建 entity_mapping。
      * 每次启动重建——新增车系无需改代码，重启即生效。
      *
+     * <p>public：车源变更广播（SkuVectorUpdater）处理后也需调用，
+     * 使新车系无需重启即可进入实体解析/关键词表。</p>
+     *
      * 手动别名覆盖常见变体：品牌缩写、中英文、大小写、口语简称。
      */
-    private void seedEntityMapping() {
+    public void rebuildEntityMapping() {
         log.info("正在构建实体映射表...");
 
         // 清空重建（幂等）
@@ -408,6 +411,12 @@ public class DatabaseInitializer implements CommandLineRunner {
             if (seriesSlug.contains(toSlug(entry.getKey()))) {
                 aliases.add(brand + "-" + entry.getValue());
             }
+        }
+
+        // 裸车系名兜底别名：未经预置映射的新车系（运行时广播进来的）
+        // 也能在整句提问中被 EntityResolver 命中（Layer-1 子串匹配）
+        if (series.trim().length() >= 2) {
+            aliases.add(series.trim());
         }
 
         // 品牌缩写别名（取品牌首字母缩写或常用简称）

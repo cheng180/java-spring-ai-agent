@@ -40,9 +40,11 @@ public class DynamicKeywordBuilder implements InitializingBean {
     }
 
     /**
-     * 重建关键词表（每次重启全量重建）。
+     * 重建关键词表。启动时由 afterPropertiesSet 构建；车源变更广播处理后
+     * 由更新链路（InMemoryIndexRefresher）再次调用，新车系无需重启即可进入
+     * 闲聊判定与模糊路由。
      */
-    synchronized void rebuild() {
+    public synchronized void rebuild() {
         Map<String, List<String>> kw2series = new LinkedHashMap<>();
 
         // 1. 从 entity_mapping 提取别名

@@ -33,15 +33,18 @@ public class SkuVectorUpdater implements SkuChangeListener {
     private final SkuFactExtractor skuFactExtractor;
     private final SeriesParentBuilder parentBuilder;
     private final JdbcTemplate jdbc;
+    private final InMemoryIndexRefresher indexRefresher;
 
     public SkuVectorUpdater(VectorStore vectorStore,
                             SkuFactExtractor skuFactExtractor,
                             SeriesParentBuilder parentBuilder,
-                            JdbcTemplate jdbc) {
+                            JdbcTemplate jdbc,
+                            InMemoryIndexRefresher indexRefresher) {
         this.vectorStore = vectorStore;
         this.skuFactExtractor = skuFactExtractor;
         this.parentBuilder = parentBuilder;
         this.jdbc = jdbc;
+        this.indexRefresher = indexRefresher;
     }
 
     // ---- SkuChangeListener 接口实现 ----
@@ -50,6 +53,9 @@ public class SkuVectorUpdater implements SkuChangeListener {
     public void onSkuChanged(SkuChangeEvent event) {
         log.info("SkuVectorUpdater: 收到变更事件 - {}", event);
         processChange(event);
+        // 广播下半场：刷新问答侧内存知识结构（BM25/实体索引/关键词表），
+        // 否则 Chroma 虽已更新，检索与路由仍用旧数据 → "必须重启才生效"
+        indexRefresher.refreshAll();
     }
 
     // ---- 核心同步逻辑 ----
@@ -239,6 +245,10 @@ public class SkuVectorUpdater implements SkuChangeListener {
 
         log.info("SkuVectorUpdater: 增量同步完成 — 变更 {} 条, 未变 {} 条, 清理 {} 条, 父块 {} 个",
                 changed, unchanged, deleted, parentsBuilt);
+
+        // 全量同步后同样刷新内存知识结构（覆盖手动 /api/kb/sku/refresh 全量模式；
+        // 启动时 CarSkuVectorIndexer 走此路径，顺带修正启动顺序导致的旧数据索引）
+        indexRefresher.refreshAll();
 
         return Map.of("changed", changed, "unchanged", unchanged,
                 "deleted", deleted, "parentsBuilt", parentsBuilt);

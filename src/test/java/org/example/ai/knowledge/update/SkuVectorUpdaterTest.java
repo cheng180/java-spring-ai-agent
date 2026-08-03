@@ -24,6 +24,7 @@ class SkuVectorUpdaterTest {
     @Mock private VectorStore vectorStore;
     @Mock private JdbcTemplate jdbc;
     @Mock private AskCountTracker askCountTracker;
+    @Mock private InMemoryIndexRefresher indexRefresher;
 
     private SkuFactExtractor skuExtractor;
     private SkuVectorUpdater updater;
@@ -36,7 +37,7 @@ class SkuVectorUpdaterTest {
 
         skuExtractor = new SkuFactExtractor(jdbc);
         var parentBuilder = new SeriesParentBuilder(jdbc, skuExtractor, askCountTracker);
-        updater = new SkuVectorUpdater(vectorStore, skuExtractor, parentBuilder, jdbc);
+        updater = new SkuVectorUpdater(vectorStore, skuExtractor, parentBuilder, jdbc, indexRefresher);
     }
 
     @Test
