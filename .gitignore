@@ -34,3 +34,18 @@ build/
 
 ### Claude Code ###
 .claude/settings.local.json
+
+### Local startup scripts (contain API keys) ###
+start.sh
+start.bat
+
+### Build artifacts (do not commit binaries) ###
+*.tar
+*.tar.gz
+app.jar
+META-INF/
+
+### Secrets / env files (contain API keys) ###
+.env
+.env.*
+!.env.example

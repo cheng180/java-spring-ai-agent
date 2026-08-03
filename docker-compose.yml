@@ -1,0 +1,40 @@
+# ============================================
+# 汽车销售 AI 客服 — Docker Compose
+# 使用：docker compose up -d
+# ============================================
+
+services:
+  # ---- ChromaDB 向量数据库 ----
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: ai-chromadb
+    ports:
+      - "8001:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    restart: unless-stopped
+
+  # ---- Spring Boot AI 客服应用 ----
+  app:
+    build: .
+    container_name: ai-car-sales
+    ports:
+      - "8080:8080"
+    environment:
+      # 千问 Chat (DashScope) — 从 .env 或宿主环境读取，切勿写入明文密钥
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      # 硅基流动 Embedding
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY}
+      # DeepSeek（备用）
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY}
+      # Anthropic Claude（备用）
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-your-anthropic-api-key}
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      - chromadb
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  app_data:

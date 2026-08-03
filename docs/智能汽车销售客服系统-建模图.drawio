@@ -1,0 +1,823 @@
+<mxfile host="app.diagrams.net">
+  <diagram id="page-system-dfd" name="系统整体DFD数据流图">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title-1" value="智能汽车销售客服系统 — 整体数据流图 (DFD)" style="text;fontSize=20;fontStyle=1;fillColor=#1A237E;fontColor=#ffffff;align=center;strokeColor=#0D47A1;" vertex="1" parent="1">
+          <mxGeometry x="150" y="10" width="500" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ====== LAYER 1: Channel Layer ====== -->
+        <mxCell id="layer1-bg" value="" style="rounded=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;dashed=1;opacity=50;" vertex="1" parent="1">
+          <mxGeometry x="40" y="65" width="720" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="layer1-label" value="渠道接入层 (Channel Layer)" style="text;fontSize=14;fontStyle=1;fillColor=#1565C0;fontColor=#ffffff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="40" y="65" width="180" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- Channel nodes -->
+        <mxCell id="ch-wechat" value="企微SDK" style="rounded=1;fillColor=#42A5F5;fontColor=#fff;strokeColor=#1E88E5;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="100" width="80" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ch-web" value="Web Chat UI" style="rounded=1;fillColor=#42A5F5;fontColor=#fff;strokeColor=#1E88E5;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="160" y="100" width="90" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ch-video" value="视频号API" style="rounded=1;fillColor=#90CAF9;fontColor=#333;strokeColor=#64B5F6;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="270" y="100" width="80" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ch-douyin" value="抖音API" style="rounded=1;fillColor=#90CAF9;fontColor=#333;strokeColor=#64B5F6;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="370" y="100" width="80" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ch-xhs" value="小红书API" style="rounded=1;fillColor=#90CAF9;fontColor=#333;strokeColor=#64B5F6;fontStyle=0;" vertex="1" parent="1">
+          <mxGeometry x="470" y="100" width="80" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Message Gateway -->
+        <mxCell id="msg-gateway" value="消息网关
+(统一消息格式)" style="rounded=1;fillColor=#1E88E5;fontColor=#fff;strokeColor=#1565C0;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="590" y="100" width="95" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows from channels to gateway -->
+        <mxCell id="arr-w-g" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#1565C0;strokeWidth=1.5;" edge="1" parent="1" source="ch-wechat" target="msg-gateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-wb-g" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#1565C0;strokeWidth=1.5;" edge="1" parent="1" source="ch-web" target="msg-gateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-v-g" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#90CAF9;strokeWidth=1;" edge="1" parent="1" source="ch-video" target="msg-gateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-d-g" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#90CAF9;strokeWidth=1;" edge="1" parent="1" source="ch-douyin" target="msg-gateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-x-g" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#90CAF9;strokeWidth=1;" edge="1" parent="1" source="ch-xhs" target="msg-gateway">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Arrow down from gateway -->
+        <mxCell id="arr-g-down" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=2;" edge="1" parent="1" source="msg-gateway" target="safety-filter">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ====== LAYER 2: Core Processing ====== -->
+        <mxCell id="layer2-bg" value="" style="rounded=1;fillColor=#FFF3E0;strokeColor=#E65100;strokeWidth=2;dashed=1;opacity=50;" vertex="1" parent="1">
+          <mxGeometry x="40" y="175" width="720" height="390" as="geometry" />
+        </mxCell>
+        <mxCell id="layer2-label" value="核心处理层 (Spring AI Agent 编排层)" style="text;fontSize=14;fontStyle=1;fillColor=#E65100;fontColor=#ffffff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="40" y="175" width="260" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- Step 0: Safety Filter -->
+        <mxCell id="safety-filter" value="[0] 安全过滤
+注入检测
+no_reply分类" style="shape=hexagon;perimeter=hexagonPerimeter2;fillColor=#FF7043;fontColor=#fff;strokeColor=#E64A19;fontStyle=1;size=15;" vertex="1" parent="1">
+          <mxGeometry x="60" y="215" width="100" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- Step 1: Intent Router -->
+        <mxCell id="intent-router" value="[1] IntentRouter
+意图路由" style="shape=hexagon;perimeter=hexagonPerimeter2;fillColor=#FF9800;fontColor=#fff;strokeColor=#F57C00;fontStyle=1;size=15;" vertex="1" parent="1">
+          <mxGeometry x="200" y="215" width="120" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- Sub Agents -->
+        <mxCell id="agent-presales" value="售前Agent
+温度0.3" style="rounded=1;fillColor=#FFB74D;fontColor=#333;strokeColor=#FF9800;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="340" y="208" width="80" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="agent-recommend" value="推荐Agent
+温度0.5" style="rounded=1;fillColor=#FFB74D;fontColor=#333;strokeColor=#FF9800;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="340" y="248" width="80" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="agent-bargain" value="议价Agent
+温度0.8" style="rounded=1;fillColor=#FFB74D;fontColor=#333;strokeColor=#FF9800;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="430" y="208" width="80" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="agent-emotion" value="情绪安抚Agent
+温度0.7" style="rounded=1;fillColor=#FFB74D;fontColor=#333;strokeColor=#FF9800;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="430" y="248" width="80" height="35" as="geometry" />
+        </mxCell>
+
+        <!-- Arrows -->
+        <mxCell id="arr-s-i" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="safety-filter" target="intent-router">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-i-a1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1;" edge="1" parent="1" source="intent-router" target="agent-presales">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Step 2: Context Assembly -->
+        <mxCell id="context-assembly" value="[2] 上下文组装
+窗口记忆 + 摘要记忆 + 用户画像" style="rounded=1;fillColor=#FFB74D;fontColor=#333;strokeColor=#FF9800;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="305" width="170" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Step 3: RAG Engine -->
+        <mxCell id="rag-engine-bg" value="" style="rounded=1;fillColor=#FFF8E1;strokeColor=#FF8F00;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="390" y="295" width="210" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="rag-title" value="[3] RAG检索引擎" style="text;fontSize=11;fontStyle=1;fillColor=#FF8F00;fontColor=#fff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="390" y="295" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rag-query-rewrite" value="Query改写/扩展" style="rounded=1;fillColor=#FFE082;fontColor=#333;strokeColor=#FFB300;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="400" y="320" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="rag-hybrid" value="BM25+BGE-M3
+混合检索" style="rounded=1;fillColor=#FFCA28;fontColor=#333;strokeColor=#FFA000;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="358" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="rag-rerank" value="BGE-Reranker
+精排 topK=5" style="rounded=1;fillColor=#FFA000;fontColor=#fff;strokeColor=#FF6F00;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="358" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-rr-h" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1;" edge="1" parent="1" source="rag-query-rewrite" target="rag-hybrid">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-h-rerank" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1;" edge="1" parent="1" source="rag-hybrid" target="rag-rerank">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Step 4: Tool Call -->
+        <mxCell id="tool-call" value="[4] 工具调用 (LLM自主决策)
+searchInventory / getAllCars / getStoreInfo" style="rounded=1;fillColor=#FFB74D;fontColor=#333;strokeColor=#FF9800;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="375" width="170" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Step 5: LLM Generate -->
+        <mxCell id="llm-gen" value="[5] LLM生成
+System Prompt(动态注入) + 检索结果 + 工具结果" style="rounded=1;fillColor=#FF9800;fontColor=#fff;strokeColor=#E65100;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="200" y="445" width="170" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Step 6: Hallucination Defense -->
+        <mxCell id="defense-bg" value="" style="rounded=1;fillColor=#FCE4EC;strokeColor=#C62828;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="390" y="435" width="320" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="defense-title" value="[6] 幻觉防御引擎" style="text;fontSize=11;fontStyle=1;fillColor=#C62828;fontColor=#fff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="390" y="435" width="120" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="def-l1" value="L1
+Prompt规则" style="rounded=1;fillColor=#EF9A9A;fontColor=#333;strokeColor=#E53935;fontSize=9;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="460" width="60" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="def-l2" value="L2
+规则校验" style="rounded=1;fillColor=#EF5350;fontColor=#fff;strokeColor=#C62828;fontSize=9;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="475" y="460" width="60" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="def-l3" value="L3
+双模型验证" style="rounded=1;fillColor=#C62828;fontColor=#fff;strokeColor=#8E0000;fontSize=9;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="550" y="460" width="70" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="def-output" value="校验-修正闭环 → 降级/转人工" style="rounded=1;fillColor=#B71C1C;fontColor=#fff;strokeColor=#7F0000;fontSize=9;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="635" y="460" width="65" height="35" as="geometry" />
+        </mxCell>
+
+        <!-- Main flow arrows -->
+        <mxCell id="arr-ca-rag" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="context-assembly" target="rag-query-rewrite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-ca-tool" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="rag-rerank" target="tool-call">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="550" y="400" /><mxPoint x="370" y="400" /></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="arr-tool-llm" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="tool-call" target="llm-gen">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-llm-def" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="llm-gen" target="def-l1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ====== OUTPUT ====== -->
+        <mxCell id="output-node" value="[7] 回复输出 → 用户" style="shape=cylinder3;fillColor=#4CAF50;fontColor=#fff;strokeColor=#2E7D32;fontStyle=1;size=10;" vertex="1" parent="1">
+          <mxGeometry x="540" y="520" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="arr-def-out" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=2;" edge="1" parent="1" source="def-output" target="output-node">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ====== MEMORY ====== -->
+        <mxCell id="memory-bg" value="" style="rounded=1;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=1;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="380" width="140" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="memory-title" value="对话记忆管理" style="text;fontSize=11;fontStyle=1;fillColor=#2E7D32;fontColor=#fff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="40" y="380" width="100" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="mem-l1" value="L1 窗口记忆 (最近20轮)" style="rounded=1;fillColor=#A5D6A7;fontColor=#333;strokeColor=#66BB6A;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="50" y="405" width="120" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="mem-l2" value="L2 摘要记忆 (LLM压缩)" style="rounded=1;fillColor=#81C784;fontColor=#333;strokeColor=#4CAF50;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="50" y="435" width="120" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="mem-l3" value="L3 核心事实 (结构化画像)" style="rounded=1;fillColor=#4CAF50;fontColor=#fff;strokeColor=#388E3C;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="50" y="465" width="120" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- ====== LAYER 3: Python MCP Server Tool Layer ====== -->
+        <mxCell id="layer3-bg" value="" style="rounded=1;fillColor=#EDE7F6;strokeColor=#4527A0;strokeWidth=2;dashed=1;opacity=50;" vertex="1" parent="1">
+          <mxGeometry x="40" y="575" width="720" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="layer3-label" value="Python MCP Server 工具层" style="text;fontSize=14;fontStyle=1;fillColor=#4527A0;fontColor=#fff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="40" y="575" width="200" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="py-inv" value="inventory
+库存查询" style="rounded=1;fillColor=#7E57C2;fontColor=#fff;strokeColor=#5E35B1;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="60" y="605" width="80" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="py-price" value="pricing
+报价计算" style="rounded=1;fillColor=#7E57C2;fontColor=#fff;strokeColor=#5E35B1;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="155" y="605" width="80" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="py-crm" value="customer
+CRM查询" style="rounded=1;fillColor=#7E57C2;fontColor=#fff;strokeColor=#5E35B1;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="250" y="605" width="80" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="py-img" value="image
+图片生成" style="rounded=1;fillColor=#7E57C2;fontColor=#fff;strokeColor=#5E35B1;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="345" y="605" width="80" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="py-wechat" value="wechat
+消息发送" style="rounded=1;fillColor=#7E57C2;fontColor=#fff;strokeColor=#5E35B1;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="440" y="605" width="80" height="25" as="geometry" />
+        </mxCell>
+
+        <!-- ====== LAYER 4: Data Layer ====== -->
+        <mxCell id="layer4-bg" value="" style="rounded=1;fillColor=#ECEFF1;strokeColor=#37474F;strokeWidth=2;dashed=1;opacity=50;" vertex="1" parent="1">
+          <mxGeometry x="40" y="645" width="720" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="layer4-label" value="数据层 (Data Layer)" style="text;fontSize=14;fontStyle=1;fillColor=#37474F;fontColor=#fff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="40" y="645" width="160" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="db-pg" value="PostgreSQL
+业务数据/记忆持久化" style="shape=cylinder3;fillColor=#546E7A;fontColor=#fff;strokeColor=#37474F;fontStyle=1;size=8;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="60" y="675" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="db-chroma" value="Chroma/Milvus
+向量库" style="shape=cylinder3;fillColor=#78909C;fontColor=#fff;strokeColor=#546E7A;fontStyle=1;size=8;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="200" y="675" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="db-redis" value="Redis
+缓存/会话状态" style="shape=cylinder3;fillColor=#607D8B;fontColor=#fff;strokeColor=#455A64;fontStyle=1;size=8;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="320" y="675" width="100" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="db-minio" value="MinIO/OSS
+图片存储" style="shape=cylinder3;fillColor=#78909C;fontColor=#fff;strokeColor=#546E7A;fontStyle=1;size=8;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="440" y="675" width="90" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="db-es" value="Elasticsearch
+全文检索" style="shape=cylinder3;fillColor=#546E7A;fontColor=#fff;strokeColor=#37474F;fontStyle=1;size=8;fontSize=9;" vertex="1" parent="1">
+          <mxGeometry x="550" y="675" width="100" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- Legend -->
+        <mxCell id="legend-bg" value="" style="rounded=1;fillColor=#FAFAFA;strokeColor=#9E9E9E;strokeWidth=1;" vertex="1" parent="1">
+          <mxGeometry x="580" y="65" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-title" value="图例" style="text;fontSize=12;fontStyle=1;align=center;" vertex="1" parent="1">
+          <mxGeometry x="640" y="68" width="60" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-current" value="" style="rounded=1;fillColor=#42A5F5;strokeColor=#1E88E5;" vertex="1" parent="1">
+          <mxGeometry x="590" y="90" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-current-t" value="已实现" style="text;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="615" y="88" width="50" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-planned" value="" style="rounded=1;fillColor=#90CAF9;strokeColor=#64B5F6;" vertex="1" parent="1">
+          <mxGeometry x="590" y="110" width="20" height="15" as="geometry" />
+        </mxCell>
+        <mxCell id="leg-planned-t" value="规划中" style="text;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="615" y="108" width="50" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+<diagram id="arpkebl7-7byx" name="知识库构建详细流程"><mxGraphModel>
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- Title -->
+    <mxCell id="title-2" value="知识库构建详细流程 — ETL Pipeline &amp; 增量更新" style="text;fontSize=20;fontStyle=1;fillColor=#1A237E;fontColor=#fff;align=center;strokeColor=#0D47A1;" vertex="1" parent="1">
+      <mxGeometry x="120" y="10" width="560" height="40" as="geometry" />
+    </mxCell>
+
+    <!-- ====== SECTION 1: Data Sources ====== -->
+    <mxCell id="sec1-bg" value="" style="rounded=1;fillColor=#E8EAF6;strokeColor=#3949AB;strokeWidth=1.5;dashed=1;opacity=50;" vertex="1" parent="1">
+      <mxGeometry x="30" y="65" width="740" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="sec1-label" value="数据源层" style="text;fontSize=13;fontStyle=1;fillColor=#3949AB;fontColor=#fff;align=center;" vertex="1" parent="1">
+      <mxGeometry x="30" y="65" width="90" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="src-md" value="📄 Markdown文档
+(百科/话术)" style="shape=document;fillColor=#7986CB;fontColor=#fff;strokeColor=#5C6BC0;fontStyle=1;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="45" y="92" width="90" height="38" as="geometry" />
+    </mxCell>
+    <mxCell id="src-db" value="🗄️ car_sku表
+(SQLite/PostgreSQL)" style="shape=cylinder3;fillColor=#7986CB;fontColor=#fff;strokeColor=#5C6BC0;fontStyle=1;size=6;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="160" y="90" width="110" height="40" as="geometry" />
+    </mxCell>
+    <mxCell id="src-img" value="🖼️ 图片
+(VLM描述)" style="rounded=1;fillColor=#9FA8DA;fontColor=#333;strokeColor=#7986CB;fontStyle=1;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="300" y="92" width="80" height="38" as="geometry" />
+    </mxCell>
+    <mxCell id="src-audio" value="🎙️ 语音
+(Whisper)" style="rounded=1;fillColor=#9FA8DA;fontColor=#333;strokeColor=#7986CB;fontStyle=1;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="410" y="92" width="80" height="38" as="geometry" />
+    </mxCell>
+    <mxCell id="src-cms" value="📡 CMS
+(促销活动)" style="rounded=1;fillColor=#9FA8DA;fontColor=#333;strokeColor=#7986CB;fontStyle=1;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="520" y="92" width="80" height="38" as="geometry" />
+    </mxCell>
+    <mxCell id="src-mq" value="📨 MQ广播
+(车源变更)" style="rounded=1;fillColor=#9FA8DA;fontColor=#333;strokeColor=#7986CB;fontStyle=1;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="630" y="92" width="90" height="38" as="geometry" />
+    </mxCell>
+
+    <!-- Arrow: sources to change detection -->
+    <mxCell id="arr-src-cd" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="src-db" target="cd-box">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points"><mxPoint x="215" y="152" /><mxPoint x="215" y="155" /><mxPoint x="400" y="155" /></Array>
+      </mxGeometry>
+    </mxCell>
+
+    <!-- ====== SECTION 2: Change Detection ====== -->
+    <mxCell id="sec2-bg" value="" style="rounded=1;fillColor=#FFF8E1;strokeColor=#FF8F00;strokeWidth=1.5;dashed=1;opacity=50;" vertex="1" parent="1">
+      <mxGeometry x="30" y="145" width="740" height="55" as="geometry" />
+    </mxCell>
+    <mxCell id="sec2-label" value="变更检测层" style="text;fontSize=13;fontStyle=1;fillColor=#FF8F00;fontColor=#fff;align=center;" vertex="1" parent="1">
+      <mxGeometry x="30" y="145" width="90" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="cd-box" value="变更检测：哈希对比 + 时间戳对比 + DB事件监听 + MQ消息消费" style="shape=hexagon;perimeter=hexagonPerimeter2;fillColor=#FFCA28;fontColor=#333;strokeColor=#FFA000;fontStyle=1;size=8;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="260" y="155" width="280" height="40" as="geometry" />
+    </mxCell>
+
+    <!-- Arrow: change detection to ETL -->
+    <mxCell id="arr-cd-etl" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#C62828;strokeWidth=2;" edge="1" parent="1" source="cd-box" target="etl-header">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ====== SECTION 3: ETL Pipeline (Core) ====== -->
+    <mxCell id="sec3-bg" value="" style="rounded=1;fillColor=#FFEBEE;strokeColor=#C62828;strokeWidth=2;dashed=1;opacity=40;" vertex="1" parent="1">
+      <mxGeometry x="30" y="210" width="740" height="340" as="geometry" />
+    </mxCell>
+    <mxCell id="sec3-label" value="ETL Pipeline 核心处理" style="text;fontSize=13;fontStyle=1;fillColor=#C62828;fontColor=#fff;align=center;" vertex="1" parent="1">
+      <mxGeometry x="30" y="210" width="170" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 1: Format Parse -->
+    <mxCell id="etl-header" value="" style="rounded=1;fillColor=#EF5350;fontColor=#fff;strokeColor=#C62828;fontStyle=1;" vertex="1" parent="1">
+      <mxGeometry x="50" y="245" width="40" height="290" as="geometry" />
+    </mxCell>
+    <mxCell id="etl1" value="[1] 格式解析
+.md→MarkdownReader
+.txt→TextReader
+.pdf→PagePdfReader
+图片→VLM描述
+表格→LaTeX/Markdown" style="rounded=1;fillColor=#EF9A9A;fontColor=#333;strokeColor=#E53935;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="100" y="245" width="130" height="75" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 2: Proposition Extract -->
+    <mxCell id="etl2" value="[2] 命题提取 ⭐核心
+结构化数据：
+SQL+模板渲染
+非结构化：
+LLM→原子事实列表
+每条：主体+属性+值+时序标记" style="rounded=1;fillColor=#EF5350;fontColor=#fff;strokeColor=#C62828;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="255" y="245" width="145" height="75" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 3: Entity Resolution -->
+    <mxCell id="etl3" value="[3] 实体解析与去重
+同义词归一:
+比亚迪宋PLUS = BYD宋PLUS
+全称/缩写映射:
+DM-i超级混动 ↔ DM-i" style="rounded=1;fillColor=#EF9A9A;fontColor=#333;strokeColor=#E53935;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="425" y="245" width="140" height="75" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 4: Clustering -->
+    <mxCell id="etl4" value="[4] 聚类成Chunk
+同车型参数归一组
+同场景话术归一组
+控制 200-500字/Chunk
+每Chunk≈3-8条事实" style="rounded=1;fillColor=#EF5350;fontColor=#fff;strokeColor=#C62828;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="590" y="245" width="130" height="75" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 5: Parent Doc -->
+    <mxCell id="etl5" value="[5] 父文档关联
+每个Chunk→parent_doc_id
+检索时命中Chunk
+可展开父文档获取完整上下文" style="rounded=1;fillColor=#EF9A9A;fontColor=#333;strokeColor=#E53935;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="100" y="340" width="155" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 6: Embedding -->
+    <mxCell id="etl6" value="[6] Embedding生成
+BGE-M3 一次调用产出:
+• Dense (1024维 语义向量)
+• Sparse (词权重 倒排索引)
+• Multi-Vector (token级匹配)
+批量处理 ≤8192 token/批" style="rounded=1;fillColor=#EF5350;fontColor=#fff;strokeColor=#C62828;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="280" y="340" width="160" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 7: Write to Vector DB -->
+    <mxCell id="etl7" value="[7] 写入向量库
+稠密→Chroma/Milvus(HNSW)
+稀疏→Elasticsearch(倒排)
+多向量→多向量Collection
+元数据随向量存储" style="rounded=1;fillColor=#EF9A9A;fontColor=#333;strokeColor=#E53935;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="465" y="340" width="145" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- ETL Step 8: Blue-Green -->
+    <mxCell id="etl8" value="[8] 索引切换 (蓝绿部署)
+新索构建在备用Collection
+→ 质量验证通过
+→ 原子切换alias
+→ 旧版保留作回滚快照" style="rounded=1;fillColor=#C62828;fontColor=#fff;strokeColor=#8E0000;fontStyle=1;fontSize=9;align=left;spacingLeft=5;" vertex="1" parent="1">
+      <mxGeometry x="635" y="340" width="125" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- ETL flow arrows -->
+    <mxCell id="arr-e1-e2" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="etl1" target="etl2">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-e2-e3" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="etl2" target="etl3">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-e3-e4" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="etl3" target="etl4">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-e4-e5" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="etl4" target="etl5">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points"><mxPoint x="655" y="330" /><mxPoint x="180" y="330" /></Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="arr-e5-e6" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="etl5" target="etl6">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-e6-e7" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="etl6" target="etl7">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-e7-e8" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#333;strokeWidth=1.5;" edge="1" parent="1" source="etl7" target="etl8">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ====== SECTION: Blue-Green Detail ====== -->
+    <mxCell id="sec4-bg" value="" style="rounded=1;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=1.5;dashed=1;opacity=50;" vertex="1" parent="1">
+      <mxGeometry x="30" y="560" width="740" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="sec4-label" value="双索引蓝绿切换示意" style="text;fontSize=13;fontStyle=1;fillColor=#2E7D32;fontColor=#fff;align=center;" vertex="1" parent="1">
+      <mxGeometry x="30" y="560" width="150" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="bg-user" value="用户检索" style="rounded=1;fillColor=#66BB6A;fontColor=#fff;strokeColor=#43A047;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="100" y="588" width="70" height="30" as="geometry" />
+    </mxCell>
+    <mxCell id="bg-alias" value="Alias: car-sales-kb
+（应用层配置项指向）" style="shape=hexagon;perimeter=hexagonPerimeter2;fillColor=#A5D6A7;fontColor=#333;strokeColor=#66BB6A;fontStyle=1;size=6;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="210" y="583" width="140" height="40" as="geometry" />
+    </mxCell>
+    <mxCell id="bg-v1" value="Collection: car-sales-v1
+✅ 当前在线 (active)" style="shape=cylinder3;fillColor=#4CAF50;fontColor=#fff;strokeColor=#388E3C;fontStyle=1;size=6;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="400" y="583" width="130" height="40" as="geometry" />
+    </mxCell>
+    <mxCell id="bg-v2" value="Collection: car-sales-v2
+🔄 构建中... (standby)" style="shape=cylinder3;fillColor=#FFB74D;fontColor=#333;strokeColor=#FF9800;fontStyle=1;size=6;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="570" y="583" width="140" height="40" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-bg-a-v" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#2E7D32;strokeWidth=1.5;" edge="1" parent="1" source="bg-user" target="bg-alias">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-bg-a-v1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;endFill=1;strokeColor=#388E3C;strokeWidth=2;" edge="1" parent="1" source="bg-alias" target="bg-v1">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="arr-bg-a-v2" style="edgeStyle=orthogonalEdgeStyle;endArrow=open;endFill=0;strokeColor=#FF9800;strokeWidth=1;dashed=1;" edge="1" parent="1" source="bg-alias" target="bg-v2">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+
+    <!-- ====== SECTION: Three Collections ====== -->
+    <mxCell id="sec5-bg" value="" style="rounded=1;fillColor=#F3E5F5;strokeColor=#7B1FA2;strokeWidth=1.5;dashed=1;opacity=50;" vertex="1" parent="1">
+      <mxGeometry x="30" y="645" width="740" height="70" as="geometry" />
+    </mxCell>
+    <mxCell id="sec5-label" value="知识库三Collection分层（目标架构）" style="text;fontSize=13;fontStyle=1;fillColor=#7B1FA2;fontColor=#fff;align=center;" vertex="1" parent="1">
+      <mxGeometry x="30" y="645" width="240" height="22" as="geometry" />
+    </mxCell>
+    <mxCell id="col-sku" value="car-sku-facts
+车源数据(结构化)
+SQL+模板渲染
+DYNAMIC 标记
+事件驱动增量更新" style="shape=cylinder3;fillColor=#AB47BC;fontColor=#fff;strokeColor=#8E24AA;fontStyle=1;size=6;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="50" y="670" width="130" height="42" as="geometry" />
+    </mxCell>
+    <mxCell id="col-encyc" value="car-encyclopedia-facts
+百科数据(非结构化)
+LLM命题提取
+ATEMPORAL/STATIC 标记
+文档级增量更新" style="shape=cylinder3;fillColor=#CE93D8;fontColor=#333;strokeColor=#AB47BC;fontStyle=1;size=6;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="220" y="670" width="150" height="42" as="geometry" />
+    </mxCell>
+    <mxCell id="col-script" value="car-script-facts
+话术数据(非结构化)
+LLM命题提取
+ATEMPORAL 标记
+文档级增量更新" style="shape=cylinder3;fillColor=#CE93D8;fontColor=#333;strokeColor=#AB47BC;fontStyle=1;size=6;fontSize=9;" vertex="1" parent="1">
+      <mxGeometry x="410" y="670" width="140" height="42" as="geometry" />
+    </mxCell>
+    <mxCell id="col-note" value="检索时并发查三个Collection → RRF融合 → Reranker精排" style="text;fontSize=10;fontStyle=2;fillColor=#F3E5F5;strokeColor=#7B1FA2;align=center;" vertex="1" parent="1">
+      <mxGeometry x="580" y="678" width="180" height="25" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel></diagram><diagram id="ie8qtc33-71dj" name="UML类图"><mxGraphModel>
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+
+    <!-- Title -->
+    <mxCell id="uml-title" value="智能汽车销售客服系统 — UML 类图 (当前 + 规划)" style="text;fontSize=20;fontStyle=1;fillColor=#1A237E;fontColor=#fff;align=center;strokeColor=#0D47A1;" vertex="1" parent="1">
+      <mxGeometry x="120" y="5" width="620" height="35" as="geometry" />
+    </mxCell>
+
+    <!-- ============ PACKAGE: controller ============ -->
+    <mxCell id="pkg-ctrl" value="controller (已实现)" style="text;fontSize=12;fontStyle=1;fillColor=#1565C0;fontColor=#fff;align=center;strokeColor=#0D47A1;rounded=1;" vertex="1" parent="1">
+      <mxGeometry x="20" y="50" width="180" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- ChatController -->
+    <mxCell id="cls-chatctrl" value="&lt;&lt;RestController&gt;&gt;
+ChatController
+─────────────────
++ chat(msg) : String
++ chatStream(msg) : Flux
++ health() : Map
+─────────────────
+- agent : CarSalesAgent" style="rounded=0;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="20" y="75" width="175" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- KnowledgeDebugController -->
+    <mxCell id="cls-debugctrl" value="&lt;&lt;RestController&gt;&gt;
+KnowledgeDebugController
+─────────────────
++ search(q) : List
++ stats() : Map" style="rounded=0;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="20" y="170" width="175" height="65" as="geometry" />
+    </mxCell>
+
+    <!-- ============ PACKAGE: agent ============ -->
+    <mxCell id="pkg-agent" value="agent (已实现)" style="text;fontSize=12;fontStyle=1;fillColor=#E65100;fontColor=#fff;align=center;strokeColor=#BF360C;rounded=1;" vertex="1" parent="1">
+      <mxGeometry x="230" y="50" width="220" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- CarSalesAgent -->
+    <mxCell id="cls-agent" value="&lt;&lt;Component&gt;&gt;
+CarSalesAgent
+─────────────────────
++ chat(userId,msg) : String
++ chatStream(userId,msg) : Flux
++ resetIdleCounter(userId)
+─────────────────────
+- chatClient : ChatClient
+- chatMemory : ChatMemory
+- idleCounters : Map
+- CAR_KEYWORDS : Set&lt;String&gt;
+- IDLE_CHAT_LIMIT = 3
+- MEMORY_MAX_MESSAGES = 40" style="rounded=0;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="230" y="75" width="220" height="110" as="geometry" />
+    </mxCell>
+
+    <!-- PromptTemplates -->
+    <mxCell id="cls-prompt" value="&lt;&lt;Utility&gt;&gt;
+PromptTemplates
+─────────────────────
++ systemPrompt(name) : String" style="rounded=0;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="230" y="200" width="220" height="50" as="geometry" />
+    </mxCell>
+
+    <!-- ============ PACKAGE: agent.tool ============ -->
+    <mxCell id="pkg-tool" value="agent.tool (已实现)" style="text;fontSize=12;fontStyle=1;fillColor=#E65100;fontColor=#fff;align=center;strokeColor=#BF360C;rounded=1;" vertex="1" parent="1">
+      <mxGeometry x="480" y="50" width="260" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- CarSalesTools -->
+    <mxCell id="cls-tools" value="&lt;&lt;Component&gt;&gt;
+CarSalesTools
+─────────────────────
++ searchInventory(query) : String  @Tool
++ getStoreInfo() : String  @Tool
++ getAllCars() : String  @Tool
+─────────────────────
+- jdbc : JdbcTemplate
+- fenToWan(fen) : String
+- energyType(type) : String" style="rounded=0;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="480" y="75" width="260" height="100" as="geometry" />
+    </mxCell>
+
+    <!-- ============ PACKAGE: config ============ -->
+    <mxCell id="pkg-config" value="config (已实现)" style="text;fontSize=12;fontStyle=1;fillColor=#2E7D32;fontColor=#fff;align=center;strokeColor=#1B5E20;rounded=1;" vertex="1" parent="1">
+      <mxGeometry x="20" y="260" width="180" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- AiConfig -->
+    <mxCell id="cls-aiconfig" value="&lt;&lt;Configuration&gt;&gt;
+AiConfig
+─────────────────────
++ chatClientBuilder(model) : Builder" style="rounded=0;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="20" y="285" width="175" height="50" as="geometry" />
+    </mxCell>
+
+    <!-- DatabaseInitializer -->
+    <mxCell id="cls-dbinit" value="&lt;&lt;Component&gt;&gt; @Order(1)
+DatabaseInitializer
+implements CommandLineRunner
+─────────────────────
++ run(args)
+─────────────────────
+- jdbc : JdbcTemplate
+- createTables()
+- seedCarSku()
+- seedStores()" style="rounded=0;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="20" y="350" width="220" height="95" as="geometry" />
+    </mxCell>
+
+    <!-- ============ PACKAGE: knowledge ============ -->
+    <mxCell id="pkg-know" value="knowledge (已实现)" style="text;fontSize=12;fontStyle=1;fillColor=#6A1B9A;fontColor=#fff;align=center;strokeColor=#4A148C;rounded=1;" vertex="1" parent="1">
+      <mxGeometry x="270" y="350" width="180" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- KnowledgeBaseInitializer -->
+    <mxCell id="cls-kbinit" value="&lt;&lt;Component&gt;&gt; @Order(2)
+KnowledgeBaseInitializer
+implements CommandLineRunner
+─────────────────────
++ run(args)
+─────────────────────
+- vectorStore : VectorStore
+- resourceResolver
+- TXT_SPLITTER : TokenTextSplitter
+- tag(docs, filename)" style="rounded=0;fillColor=#F3E5F5;strokeColor=#6A1B9A;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="270" y="375" width="220" height="95" as="geometry" />
+    </mxCell>
+
+    <!-- CarSkuVectorIndexer -->
+    <mxCell id="cls-skuidx" value="&lt;&lt;Component&gt;&gt; @Order(3)
+CarSkuVectorIndexer
+implements CommandLineRunner
+─────────────────────
++ run(args)
++ DOC_TYPE = &quot;车源&quot;
+─────────────────────
+- vectorStore : VectorStore
+- jdbc : JdbcTemplate
+- render(row) : String" style="rounded=0;fillColor=#F3E5F5;strokeColor=#6A1B9A;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="270" y="485" width="220" height="95" as="geometry" />
+    </mxCell>
+
+    <!-- ============ PACKAGE: model ============ -->
+    <mxCell id="pkg-model" value="model (已实现)" style="text;fontSize=12;fontStyle=1;fillColor=#00838F;fontColor=#fff;align=center;strokeColor=#006064;rounded=1;" vertex="1" parent="1">
+      <mxGeometry x="520" y="190" width="260" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- CarInventory -->
+    <mxCell id="cls-car" value="&lt;&lt;Entity&gt;&gt;
+CarInventory
+─────────────────────
++ id, stockCode, brand, model
++ variant, year, fuelType
++ priceGuide, priceSale
++ stock, monthlySales, popularity
++ finalScore, semanticScore
+─────────────────────
++ getCarKey() : String
++ getPriceDisplay() : String
++ getStockDisplay() : String" style="rounded=0;fillColor=#E0F7FA;strokeColor=#00838F;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="520" y="215" width="260" height="100" as="geometry" />
+    </mxCell>
+
+    <!-- ============ PLANNED COMPONENTS ============ -->
+    <mxCell id="pkg-planned" value="规划组件 (agent/guard + knowledge/facts + agent/router + location)" style="text;fontSize=12;fontStyle=1;fillColor=#455A64;fontColor=#fff;align=center;strokeColor=#263238;rounded=1;" vertex="1" parent="1">
+      <mxGeometry x="20" y="465" width="220" height="22" as="geometry" />
+    </mxCell>
+
+    <!-- Planned: HallucinationDetector -->
+    <mxCell id="cls-planned" value="&lt;&lt;planned&gt;&gt;
+agent.guard 幻觉防御包
+─────────────────────
+HallucinationDetector (L2)
+DefenseChain (编排)
+DualModelVerifier (L3)
+SourceCapture (持有器)
+RagCaptureAdvisor
+HumanHandoffNotifier (接口)
+WeComHandoffNotifier" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="530" y="330" width="220" height="105" as="geometry" />
+    </mxCell>
+
+    <!-- Planned: VagueQueryRouter -->
+    <mxCell id="cls-planned2" value="&lt;&lt;planned&gt;&gt;
+agent.router 路由包
+─────────────────────
+VagueQueryRouter
+MatchResult (枚举)
+QuestionSplitter
+AnswerMerger
+ContextCarExtractor" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="530" y="445" width="220" height="80" as="geometry" />
+    </mxCell>
+
+    <!-- Planned: knowledge/facts -->
+    <mxCell id="cls-planned3" value="&lt;&lt;planned&gt;&gt;
+knowledge.facts 知识库包
+─────────────────────
+AtomicFact (数据模型)
+AtomicFactExtractor (接口)
+SkuFactExtractor (SQL实现)
+LlmFactExtractor (LLM实现)
+CollectionManager
+EntityResolver
+SkuChangeListener (接口)
+SkuVectorUpdater
+SeriesParentBuilder
+AskCountTracker" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="530" y="535" width="220" height="125" as="geometry" />
+    </mxCell>
+
+    <!-- Planned: location -->
+    <mxCell id="cls-planned4" value="&lt;&lt;planned&gt;&gt;
+location 位置服务包
+─────────────────────
+GeoLocator (接口)
+StoreLocator (Haversine)
+HotCarRepository
+DynamicKeywordBuilder" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="530" y="670" width="220" height="70" as="geometry" />
+    </mxCell>
+
+    <!-- ============ RELATIONSHIPS ============ -->
+    <!-- ChatController → CarSalesAgent (dependency) -->
+    <mxCell id="rel-ctrl-agent" style="edgeStyle=orthogonalEdgeStyle;endArrow=open;endFill=0;strokeColor=#E65100;strokeWidth=1.5;dashed=1;" edge="1" parent="1" source="cls-chatctrl" target="cls-agent">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points"><mxPoint x="200" y="130" /><mxPoint x="200" y="130" /></Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="rel-label1" value="依赖" style="text;fontSize=8;fillColor=#fff;strokeColor=none;" vertex="1" parent="1">
+      <mxGeometry x="195" y="120" width="30" height="14" as="geometry" />
+    </mxCell>
+
+    <!-- CarSalesAgent → PromptTemplates (use) -->
+    <mxCell id="rel-agent-prompt" style="edgeStyle=orthogonalEdgeStyle;endArrow=open;endFill=0;strokeColor=#E65100;strokeWidth=1.5;dashed=1;" edge="1" parent="1" source="cls-agent" target="cls-prompt">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="rel-label2" value="调用" style="text;fontSize=8;fillColor=#fff;strokeColor=none;" vertex="1" parent="1">
+      <mxGeometry x="340" y="195" width="30" height="14" as="geometry" />
+    </mxCell>
+
+    <!-- CarSalesAgent → CarSalesTools (dependency) -->
+    <mxCell id="rel-agent-tool" style="edgeStyle=orthogonalEdgeStyle;endArrow=open;endFill=0;strokeColor=#E65100;strokeWidth=1.5;dashed=1;" edge="1" parent="1" source="cls-agent" target="cls-tools">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points"><mxPoint x="460" y="130" /><mxPoint x="460" y="130" /></Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="rel-label3" value="依赖" style="text;fontSize=8;fillColor=#fff;strokeColor=none;" vertex="1" parent="1">
+      <mxGeometry x="455" y="120" width="30" height="14" as="geometry" />
+    </mxCell>
+
+    <!-- CarSalesTools → JdbcTemplate (dependency) -->
+    <!-- DatabaseInitializer → JdbcTemplate (dependency) -->
+
+    <!-- KnowledgeBaseInitializer → VectorStore (dependency) -->
+    <!-- CarSkuVectorIndexer → VectorStore + JdbcTemplate -->
+
+    <!-- Legend -->
+    <mxCell id="uml-legend" value="" style="rounded=1;fillColor=#FAFAFA;strokeColor=#9E9E9E;strokeWidth=1;" vertex="1" parent="1">
+      <mxGeometry x="20" y="600" width="480" height="125" as="geometry" />
+    </mxCell>
+    <mxCell id="uml-leg-title" value="图例说明" style="text;fontSize=12;fontStyle=1;fillColor=#37474F;fontColor=#fff;align=center;" vertex="1" parent="1">
+      <mxGeometry x="20" y="600" width="100" height="20" as="geometry" />
+    </mxCell>
+    <mxCell id="uml-leg1" value="🟦 已实现组件" style="text;fontSize=9;align=left;" vertex="1" parent="1">
+      <mxGeometry x="30" y="625" width="150" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="uml-leg2" value="⬜ 虚线框 = 规划组件" style="text;fontSize=9;align=left;" vertex="1" parent="1">
+      <mxGeometry x="30" y="645" width="180" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="uml-leg3" value="---→ 依赖/调用关系" style="text;fontSize=9;align=left;" vertex="1" parent="1">
+      <mxGeometry x="30" y="665" width="180" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="uml-leg4" value="@Order(1)→(2)→(3) 启动顺序：
+DatabaseInitializer → KnowledgeBaseInitializer → CarSkuVectorIndexer" style="text;fontSize=9;align=left;" vertex="1" parent="1">
+      <mxGeometry x="30" y="685" width="460" height="18" as="geometry" />
+    </mxCell>
+    <mxCell id="uml-leg5" value="ChatClient链: MemoryAdvisor → RagAdvisor → Tools → LLM Call → DefenseChain" style="text;fontSize=9;align=left;" vertex="1" parent="1">
+      <mxGeometry x="30" y="703" width="460" height="18" as="geometry" />
+    </mxCell>
+
+  </root>
+</mxGraphModel></diagram></mxfile>
