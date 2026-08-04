@@ -9,6 +9,10 @@
 export DEEPSEEK_API_KEY=your-deepseek-api-key
 export SILICONFLOW_API_KEY=your-siliconflow-api-key
 export ANTHROPIC_API_KEY=your-anthropic-api-key
+# Langfuse 可观测（可选：Langfuse 未启动也不影响应用运行）
+export LANGFUSE_PUBLIC_KEY=pk-lf-your-public-key
+export LANGFUSE_SECRET_KEY=sk-lf-your-secret-key
+export LANGFUSE_BASE_URL=http://127.0.0.1:3000
 
 echo "✅ 环境变量已设置"
 

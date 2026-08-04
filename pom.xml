@@ -84,6 +84,26 @@
             <scope>runtime</scope>
             <optional>true</optional>
         </dependency>
+        <!-- ========== Langfuse 可观测（追踪智能客服 Agent） ==========
+             链路：Spring AI Micrometer Observation → micrometer-tracing OTel 桥接
+             → OpenTelemetry SDK → OTLP HTTP 导出到 Langfuse（/api/public/otel/v1/traces）。
+             spring-boot-micrometer-tracing-opentelemetry 会传递引入 observation/tracing/otel-sdk
+             三个 Boot 4 自动装配模块。
+             松耦合：导出器仅在 langfuse.enabled=true 时装配（见 LangfuseObservabilityConfig）；
+             Langfuse 未启动时导出失败只丢弃 span，应用照常运行。版本由 Boot BOM 统一管理 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-micrometer-tracing-opentelemetry</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
