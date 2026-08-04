@@ -140,6 +140,25 @@ class QueryLevelClassifierTest {
     }
 
     @Test
+    @DisplayName("#31 预算表述：我要买20万的宝马 → UNRESTRICTED（提预算=谈价格，需全量数据）")
+    void budgetWordsAreUnrestricted() {
+        QueryClassification c = classifier.classify("我要买20万的宝马",
+                List.of(entity("宝马", "宝马X3 M")));
+        assertThat(c.level()).isEqualTo(QueryLevel.UNRESTRICTED);
+    }
+
+    @Test
+    @DisplayName("#31 预算词变体：预算/以内/左右 → UNRESTRICTED")
+    void budgetWordVariantsAreUnrestricted() {
+        assertThat(classifier.classify("预算15万，有什么推荐", List.of()).level())
+                .isEqualTo(QueryLevel.UNRESTRICTED);
+        assertThat(classifier.classify("10万以内的电车", List.of()).level())
+                .isEqualTo(QueryLevel.UNRESTRICTED);
+        assertThat(classifier.classify("20万左右的SUV", List.of()).level())
+                .isEqualTo(QueryLevel.UNRESTRICTED);
+    }
+
+    @Test
     @DisplayName("对比查询：宋PLUS和海豹哪个好 → UNRESTRICTED（对比需要两边数据）")
     void comparisonIsUnrestricted() {
         QueryClassification c = classifier.classify("宋PLUS和海豹哪个好",

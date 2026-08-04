@@ -29,6 +29,8 @@ public class QueryLevelClassifier {
     private static final Set<String> DETAIL_WORDS = Set.of(
             // 价格类
             "多少钱", "价格", "优惠", "落地价",
+            // 预算类（#31：客户开口提预算就是在谈价格，需全量数据接匹配话题）
+            "万", "预算", "以内", "左右",
             // 参数类
             "配置", "参数", "续航", "油耗",
             // 细节类
