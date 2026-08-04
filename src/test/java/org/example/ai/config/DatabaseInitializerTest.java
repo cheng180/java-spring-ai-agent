@@ -4,9 +4,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.sqlite.SQLiteDataSource;
 
+import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -120,12 +124,12 @@ class DatabaseInitializerTest {
     @DisplayName("rebuildEntityMapping：车系名拆词注册裸车型别名（宝马X3 M → X3）")
     void rebuildEntityMappingRegistersBareModelTokens() throws Exception {
         // :memory: 单连接库不便复用，切临时文件 DB 走 JdbcTemplate
-        java.io.File tmpDb = new java.io.File(System.getProperty("java.io.tmpdir"),
-                "test-init-" + java.util.UUID.randomUUID() + ".db");
+        File tmpDb = new File(System.getProperty("java.io.tmpdir"),
+                "test-init-" + UUID.randomUUID() + ".db");
         try {
-            var ds = new org.sqlite.SQLiteDataSource();
+            var ds = new SQLiteDataSource();
             ds.setUrl("jdbc:sqlite:" + tmpDb.getAbsolutePath());
-            var jdbc = new org.springframework.jdbc.core.JdbcTemplate(ds);
+            var jdbc = new JdbcTemplate(ds);
             jdbc.execute("CREATE TABLE car_sku (id INTEGER PRIMARY KEY, brand_name TEXT, series_name TEXT,"
                     + " sale_status INTEGER DEFAULT 1, is_deleted INTEGER DEFAULT 0)");
             jdbc.execute("CREATE TABLE entity_mapping (entity_id TEXT NOT NULL, display_name TEXT NOT NULL,"

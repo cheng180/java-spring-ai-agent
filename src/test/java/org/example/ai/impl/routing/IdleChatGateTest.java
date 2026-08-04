@@ -30,7 +30,9 @@ class IdleChatGateTest {
             "666",
             "你们有什么车",
             "你好，我想看看SUV",   // 寒暄开头但带业务意图——长度守卫放行
-            "谢谢，那我再看看别的车"
+            "谢谢，那我再看看别的车",
+            "我想买hi4",          // 寒暄词是车型词子串（hi 已剔除黑名单）
+            "这个价格不用了"       // 寒暄词在句中——首词锚定放行，走业务管线
     })
     @DisplayName("购车意图/业务/模糊短句 → 非闲聊（默认进业务管线）")
     void businessMessagesAreNotIdle(String message) {

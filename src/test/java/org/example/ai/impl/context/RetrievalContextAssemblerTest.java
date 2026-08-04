@@ -176,7 +176,8 @@ class RetrievalContextAssemblerTest {
 
     @Test
     @DisplayName("SERIES 级父块缺失（下架车系）→ 降级回退泛检索，绝不注入空上下文")
-    void seriesLevelFallsBackWhenParentMissing() {        ResolvedEntity re = new ResolvedEntity(
+    void seriesLevelFallsBackWhenParentMissing() {
+        ResolvedEntity re = new ResolvedEntity(
                 "entity:car:某品牌:已下架车系", "某品牌-已下架车系", "某品牌", "已下架车系");
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
 

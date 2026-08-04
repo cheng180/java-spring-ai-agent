@@ -114,8 +114,7 @@ public class CarSalesAgent implements ChatService {
         List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
         int idleCount = idleCounters.getOrDefault(userId, 0);
-        // 黑名单制（#29）：只有明确闲聊才进闲聊分支；提到车系实体的消息永不判闲聊
-        boolean isIdle = idleChatGate.isIdleChat(userMessage) && matchedSeries.isEmpty();
+        boolean isIdle = isIdle(userMessage, matchedSeries);
         boolean terminated = false;
         String response;
         QueryClassification classification = null;
@@ -198,6 +197,14 @@ public class CarSalesAgent implements ChatService {
         }
     }
 
+    /**
+     * 闲聊判定（#29 黑名单制）：只有命中明确闲聊黑名单才进闲聊分支；
+     * 提到车系实体的消息永不判闲聊。chat()/chatStream() 两个入口共用。
+     */
+    private boolean isIdle(String userMessage, List<ResolvedEntity> matchedSeries) {
+        return idleChatGate.isIdleChat(userMessage) && matchedSeries.isEmpty();
+    }
+
     private List<ResolvedEntity> resolveEntities(String message) {
         return entityResolver.resolve(message);
     }
@@ -253,8 +260,7 @@ public class CarSalesAgent implements ChatService {
         List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
         int idleCount = idleCounters.getOrDefault(userId, 0);
-        // 黑名单制（#29）：与 chat() 同步入口同判定
-        boolean isIdle = idleChatGate.isIdleChat(userMessage) && matchedSeries.isEmpty();
+        boolean isIdle = isIdle(userMessage, matchedSeries);
         boolean terminated = false;
 
         if (isIdle) {

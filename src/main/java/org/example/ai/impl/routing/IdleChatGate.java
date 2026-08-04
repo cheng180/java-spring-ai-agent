@@ -19,8 +19,9 @@ import java.util.Set;
  * <p>黑名单分两类：</p>
  * <ul>
  *   <li>话题类：词本身即闲聊话题（天气/笑话/问身份），子串命中即判。</li>
- *   <li>寒暄类：问候/感谢/道别，常作业务句前缀（"你好，我想买x3"），
- *       仅当消息几乎只有寒暄（有效长度 ≤ 命中词长 + {@link #PHATIC_TAIL_BUDGET}）时才判。</li>
+ *   <li>寒暄类：问候/感谢/道别，常作业务句前缀（"你好，我想买x3"）或藏在业务句中
+ *       （"这个价格不用了"），仅当<b>位于句首</b>且消息几乎只有寒暄
+ *       （有效长度 ≤ 命中词长 + {@link #PHATIC_TAIL_BUDGET}）时才判。</li>
  * </ul>
  */
 @Component
@@ -32,10 +33,10 @@ public class IdleChatGate {
             "你是谁", "你叫什么", "你是机器人", "你是真人", "你是ai"
     );
 
-    /** 寒暄类黑名单：需通过长度守卫（防"你好，我想买x3"误判） */
+    /** 寒暄类黑名单：需通过首词锚定 + 长度守卫（防"你好，我想买x3"误判） */
     private static final Set<String> PHATIC_PATTERNS = Set.of(
-            // 问候
-            "你好", "您好", "在吗", "嗨", "哈喽", "hello", "hi",
+            // 问候（"hi" 不收——子串会命中车型词如 "hi4"）
+            "你好", "您好", "在吗", "嗨", "哈喽", "hello",
             "早上好", "下午好", "晚上好",
             // 感谢
             "谢谢", "多谢", "感谢", "thanks", "thx",
@@ -62,10 +63,11 @@ public class IdleChatGate {
             if (lower.contains(p)) return true;
         }
 
-        // 寒暄类：仅当消息几乎只有寒暄时命中
+        // 寒暄类：仅当寒暄词在句首且消息几乎只有寒暄时命中
+        // （句中命中会吞掉业务句——"这个价格不用了"的"不用了"在句中，应走业务管线）
         int effectiveLen = stripDecorations(lower).length();
         for (String p : PHATIC_PATTERNS) {
-            if (lower.contains(p) && effectiveLen <= p.length() + PHATIC_TAIL_BUDGET) {
+            if (lower.startsWith(p) && effectiveLen <= p.length() + PHATIC_TAIL_BUDGET) {
                 return true;
             }
         }
