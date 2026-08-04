@@ -47,15 +47,27 @@ public class RetrievalContextAssembler {
             + "然后用一个问题反问用户偏好（如心仪的款式、预算或用途）收尾；"
             + "禁止列出车系/车型清单，禁止展开具体车源；本轮不要调用 searchInventory/getAllCars 工具。";
 
+    /**
+     * 披露约束子句（#32 ticket）——披露边界在回复层，不在上下文层。
+     *
+     * <p>上下文保持全量注入（价格等信息是客服的知识，必须在场）；
+     * 本轮是否把价格数字告诉客户，由本约束裁决：未问价不报价。</p>
+     */
+    static final String PRICE_DISCLOSURE_CLAUSE =
+            "注意：上面资料里即使有价格、库存等具体数字，用户没明确问价就不要报——"
+            + "本轮只做介绍，不报价。";
+
     /** FAMILY 级级别指令：只讲命中的车系，问用户想深入哪个 */
     static final String FAMILY_INSTRUCTION =
             "用户提到了同品牌的多个车系。只介绍上面命中的这几个车系（不要涉及其他车系），"
-            + "不要展开具体款型清单；末尾询问用户想深入了解哪个车系。";
+            + "不要展开具体款型清单；末尾询问用户想深入了解哪个车系。"
+            + PRICE_DISCLOSURE_CLAUSE;
 
     /** SERIES 级级别指令：只讲命中的车系，末尾问是否深入了解 */
     static final String SERIES_INSTRUCTION =
             "用户聚焦单个车系。只介绍这个车系（不要提其他车系），可基于上面的车系信息回答；"
-            + "末尾询问用户是否想深入了解该车系（如优点、亮点等）。";
+            + "末尾询问用户是否想深入了解该车系（如优点、亮点等）。"
+            + PRICE_DISCLOSURE_CLAUSE;
 
     private final HybridRetriever hybridRetriever;
     private final VectorStore vectorStore;
