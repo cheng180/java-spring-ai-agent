@@ -52,6 +52,9 @@ public class CarSalesAgent implements ChatService {
     private static final int IDLE_CHAT_LIMIT = 3;
     private static final String IDLE_TERMINATION = "买车的事随时找我，先不打扰您了～有需要再聊！";
 
+    /** 空消息固定引导——空串不能进 ChatClient（Spring AI 对 user/system 文本断言非空） */
+    private static final String BLANK_MESSAGE_REPLY = "您想了解点什么呢？说说想看的车或者预算，我帮您参谋～";
+
     private final Map<String, Integer> idleCounters = new ConcurrentHashMap<>();
 
     private final ChatClient chatClient;
@@ -111,6 +114,12 @@ public class CarSalesAgent implements ChatService {
      */
     @Override
     public String chat(String userId, String userMessage, String userIp) {
+        if (userMessage == null || userMessage.isBlank()) {
+            logConversation(userId, userMessage == null ? "" : userMessage, BLANK_MESSAGE_REPLY,
+                    0, false, false, List.of(), null);
+            return BLANK_MESSAGE_REPLY;
+        }
+
         List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
         int idleCount = idleCounters.getOrDefault(userId, 0);
@@ -157,12 +166,14 @@ public class CarSalesAgent implements ChatService {
                     ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
                 }
 
-                response = chatClient.prompt()
+                // 空上下文不挂 system（Spring AI 断言文本非空；全检索落空时 buildContext 返回 ""）
+                ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
                         .user(userMessage)
-                        .system(ragContext)
-                        .advisors(a -> a.param("chat_memory_conversation_id", userId))
-                        .call()
-                        .content();
+                        .advisors(a -> a.param("chat_memory_conversation_id", userId));
+                if (ragContext != null && !ragContext.isBlank()) {
+                    spec = spec.system(ragContext);
+                }
+                response = spec.call().content();
             }
         }
 
@@ -257,6 +268,12 @@ public class CarSalesAgent implements ChatService {
      */
     @Override
     public Flux<String> chatStream(String userId, String userMessage, String userIp) {
+        if (userMessage == null || userMessage.isBlank()) {
+            logConversation(userId, userMessage == null ? "" : userMessage, "[stream-blank]",
+                    0, false, false, List.of(), null);
+            return Flux.just(BLANK_MESSAGE_REPLY);
+        }
+
         List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
         int idleCount = idleCounters.getOrDefault(userId, 0);
@@ -299,12 +316,14 @@ public class CarSalesAgent implements ChatService {
             ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
         }
 
-        return chatClient.prompt()
+        // 空上下文不挂 system（与 chat() 同步入口同守卫）
+        ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
                 .user(userMessage)
-                .system(ragContext)
-                .advisors(a -> a.param("chat_memory_conversation_id", userId))
-                .stream()
-                .content();
+                .advisors(a -> a.param("chat_memory_conversation_id", userId));
+        if (ragContext != null && !ragContext.isBlank()) {
+            spec = spec.system(ragContext);
+        }
+        return spec.stream().content();
     }
 
     public void resetIdleCounter(String userId) {
