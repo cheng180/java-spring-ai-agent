@@ -25,6 +25,13 @@ import java.util.Map;
 public class CarSalesTools {
 
     private static final Logger log = LoggerFactory.getLogger(CarSalesTools.class);
+
+    /**
+     * searchInventory matched 分支行数上限（#38 ticket，《回复过长问题解决评估文档》R1 决堤口）。
+     * 受限级别轮次 LLM 一旦违反工具抑制指令调用本工具，封顶防止全量 SKU 回流上下文。
+     */
+    private static final int SEARCH_MATCHED_LIMIT = 30;
+
     private final JdbcTemplate jdbc;
     private final StoreLocator storeLocator;
     private final PositionStackGeoLocator geocoder;
@@ -73,7 +80,8 @@ public class CarSalesTools {
                 String p = "%" + matched.get(i) + "%";
                 params.add(p); params.add(p); params.add(p);
             }
-            rows = jdbc.queryForList(baseSql + "(" + cond + ")", params.toArray());
+            rows = jdbc.queryForList(
+                    baseSql + "(" + cond + ") LIMIT " + SEARCH_MATCHED_LIMIT, params.toArray());
         }
 
         if (rows.isEmpty()) {
