@@ -15,7 +15,7 @@ import java.util.stream.Collectors;
  * 替代 CarSalesAgent 中的硬编码 CAR_KEYWORDS 和 CarSalesTools 中的每次查库品牌/车系匹配。
  * 新增品牌/车系不需要改代码，重启即生效。
  *
- * 同时构建关键词→车系映射，供后续阶段三 VagueQueryRouter 使用。
+ * 同时构建关键词→车系映射，供查询粒度分类与库存工具使用。
  */
 @Component
 public class DynamicKeywordBuilder implements InitializingBean {
