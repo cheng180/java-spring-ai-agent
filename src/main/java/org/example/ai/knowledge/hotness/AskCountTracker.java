@@ -1,5 +1,6 @@
 package org.example.ai.knowledge.hotness;
 
+import org.example.ai.knowledge.entity.SeriesKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -146,8 +147,8 @@ public class AskCountTracker {
                     double hb = weighted.getOrDefault(b, 0.0) + skuCounts.getOrDefault(b, 0);
                     int byHeat = Double.compare(hb, ha);
                     if (byHeat != 0) return byHeat;
-                    int bySales = Long.compare(sales.getOrDefault(seriesNameOf(b), 0L),
-                            sales.getOrDefault(seriesNameOf(a), 0L));
+                    int bySales = Long.compare(sales.getOrDefault(SeriesKeys.nameOf(b), 0L),
+                            sales.getOrDefault(SeriesKeys.nameOf(a), 0L));
                     if (bySales != 0) return bySales;
                     return a.compareTo(b); // 全并列时确定性兜底
                 })
@@ -171,12 +172,6 @@ public class AskCountTracker {
             // 销量表不可用时静默降级为纯热度排序（与组装器 loadGlobalSales 同策略）
         }
         return sales;
-    }
-
-    /** "比亚迪-宋PLUS DM-i" → "宋PLUS DM-i"（store_car_hot 按车系名存销量） */
-    private static String seriesNameOf(String seriesKey) {
-        int idx = seriesKey == null ? -1 : seriesKey.indexOf('-');
-        return idx > 0 ? seriesKey.substring(idx + 1) : seriesKey;
     }
 
     /**

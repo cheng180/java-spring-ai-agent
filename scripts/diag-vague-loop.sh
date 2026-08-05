@@ -105,11 +105,13 @@ else
   green S2
 fi
 
-# ---- S3：续答 杭州 —— 不得再问城市 ----
+# ---- S3：续答 杭州 —— 不得再问城市，应向推荐方向推进 ----
 chat "$RUN_ID-s2" "杭州"
 echo "[S3] 杭州 → $(cat "$RESP_FILE")"
 if grep -q "哪个城市" "$RESP_FILE"; then
   red S3 "客户已回答城市，又被重复询问（画像跨轮状态失效）"
+elif ! grep -q '[？?]' "$RESP_FILE"; then
+  red S3 "回答城市后未向推荐推进（引导应以一个轻问题收尾）"
 else
   green S3
 fi
@@ -121,6 +123,8 @@ if grep -q "哪个城市" "$RESP_FILE"; then
   red S4 "同轮已给城市仍反问城市（画像抓取未生效）"
 elif [ "$(reply_bytes)" -gt 1200 ]; then
   red S4 "推荐回复过长（$(reply_bytes) 字节 > 1200，应为 1-2 款起点选项）"
+elif ! grep -q '[？?]' "$RESP_FILE"; then
+  red S4 "推荐未以轻问题收尾（档 3 引导形态：起点选项 + 一个轻问题）"
 else
   green S4
 fi

@@ -88,15 +88,15 @@ public class VagueScorer {
 
         // ---- 第一层：结构信号（实体别名命中） ----
         if (matchedSeries != null && !matchedSeries.isEmpty()) {
-            List<String> names = matchedSeries.stream().map(ResolvedEntity::series).toList();
+            List<String> keys = matchedSeries.stream().map(ResolvedEntity::seriesKey).toList();
             if (matchedSeries.size() == 1) {
                 // 单命中 → 清晰（"有x3吗"类边界用例不误注入引导）
                 return new VagueAssessment(VagueAssessment.TIER_CLEAR,
-                        SINGLE_ALIAS_CONFIDENCE, names, signals);
+                        SINGLE_ALIAS_CONFIDENCE, keys, signals);
             }
             // 多命中 → 浅模糊候选集；置信度记灰色地带上沿（可标定）
             return new VagueAssessment(VagueAssessment.TIER_LIGHT,
-                    grayConfidence, names, signals);
+                    grayConfidence, keys, signals);
         }
 
         // ---- 无结构信号：第二层相对领先度 + 第三层绝对相似度 ----
@@ -108,31 +108,31 @@ public class VagueScorer {
         // 有需求信号但无别名锚点 → 中模糊（能匹配给 1-2 款，不能则补问最缺维度）
         if (!signals.isEmpty()) {
             double conf = 0.3 + 0.4 * clamp01((top1 - deepConfidence) / span());
-            List<String> names = n == 0 ? List.of()
+            List<String> keys = n == 0 ? List.of()
                     : candidates.stream()
                         .filter(c -> c.similarity() >= deepConfidence)
                         .limit(2)
-                        .map(c -> seriesName(c.seriesKey()))
+                        .map(ScoredCandidate::seriesKey)
                         .toList();
-            return new VagueAssessment(VagueAssessment.TIER_MEDIUM, round2(conf), names, signals);
+            return new VagueAssessment(VagueAssessment.TIER_MEDIUM, round2(conf), keys, signals);
         }
 
         // 零信号 + 明确领先（差距 ≥ clearGap）→ 清晰；领先明确时不看绝对值（抗整体漂移）
         if (top1 >= deepConfidence && lead >= clearLeadGap) {
             return new VagueAssessment(VagueAssessment.TIER_CLEAR, round2(top1),
-                    n >= 1 ? List.of(seriesName(candidates.get(0).seriesKey())) : List.of(),
+                    n >= 1 ? List.of(candidates.get(0).seriesKey()) : List.of(),
                     signals);
         }
 
         // 零信号 + 候选咬得近（差距 ≤ closeGap）→ 浅模糊，给 top 1-2 选项确认
         if (n >= 2 && lead <= closeLeadGap && top1 >= deepConfidence) {
-            List<String> names = candidates.stream()
+            List<String> keys = candidates.stream()
                     .filter(c -> c.similarity() >= deepConfidence)
                     .limit(2)
-                    .map(c -> seriesName(c.seriesKey()))
+                    .map(ScoredCandidate::seriesKey)
                     .toList();
             return new VagueAssessment(VagueAssessment.TIER_LIGHT,
-                    round2((top1 + top2) / 2), names, signals);
+                    round2((top1 + top2) / 2), keys, signals);
         }
 
         // 深模糊：零信号且无强检索证据（绝对相似度仅在灰色地带裁决，0.7/0.6/0.5 属本层）
@@ -151,11 +151,5 @@ public class VagueScorer {
 
     private static double round2(double v) {
         return Math.round(v * 100.0) / 100.0;
-    }
-
-    /** "比亚迪-宋PLUS DM-i" → "宋PLUS DM-i"（引导文案用显示名） */
-    public static String seriesName(String seriesKey) {
-        int idx = seriesKey == null ? -1 : seriesKey.indexOf('-');
-        return idx > 0 ? seriesKey.substring(idx + 1) : seriesKey;
     }
 }

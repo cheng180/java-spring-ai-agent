@@ -128,14 +128,18 @@ public class RetrievalContextAssembler {
     public record Result(String context, QueryClassification classification,
                          VagueAssessment vague, String guidance) {
 
+        /** 引导是否实际注入（非空且非空白）——同步/流式入口与日志共用同一判定 */
+        public boolean hasGuidance() {
+            return guidance != null && !guidance.isBlank();
+        }
+
         /**
          * system 注入文本 = 组装上下文 + 引导段落（#41：引导走新字段拼接，
          * context 字节流保持原样，字节级黄金锚点不破）。
          */
         public String systemText() {
-            boolean hasGuidance = guidance != null && !guidance.isBlank();
             boolean hasContext = context != null && !context.isBlank();
-            if (!hasGuidance) return context;
+            if (!hasGuidance()) return context;
             if (!hasContext) return GUIDANCE_HEADER + guidance;
             return context + "\n" + GUIDANCE_HEADER + guidance;
         }
@@ -356,8 +360,11 @@ public class RetrievalContextAssembler {
     /**
      * 父块召回 → 带相似度的车系候选（#41 第二/三层证据）。
      * 按车系去重（同车系取最高分），相似度降序；无分数的文档不计入（fail-safe）。
+     *
+     * <p>public static：供离线标定工具（#40 ThresholdCalibrationLiveTest）复用，
+     * 保证标定 oracle 与阶段一召回同口径、不漂移。</p>
      */
-    private List<ScoredCandidate> scoredCandidates(List<Document> parentDocs) {
+    public static List<ScoredCandidate> scoredCandidates(List<Document> parentDocs) {
         Map<String, Double> bestBySeries = new LinkedHashMap<>();
         for (Document d : parentDocs) {
             String sid = metaStr(d, "series_id");

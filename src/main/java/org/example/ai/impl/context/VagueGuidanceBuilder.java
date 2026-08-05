@@ -7,15 +7,20 @@ import org.example.ai.impl.location.StoreLocator;
 import org.example.ai.impl.profile.CustomerProfile;
 import org.example.ai.impl.profile.CustomerProfileRepository;
 import org.example.ai.impl.routing.VagueAssessment;
+import org.example.ai.knowledge.entity.SeriesKeys;
 import org.example.ai.knowledge.hotness.AskCountTracker;
-import org.example.ai.impl.routing.VagueScorer;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -32,8 +37,9 @@ import java.util.stream.Collectors;
  *       画像无城市 → 引导反问城市（话术带好处，<b>禁止静默退回全局</b>）。</li>
  * </ul>
  *
- * <p>画像即跨轮引导状态（决策 8）：城市已知不再问——画像读取发生在
- * 对话入口抓取入库之后，客户回答"杭州"类短消息当轮即升级为门店热销推荐。
+ * <p>画像即跨轮引导状态（决策 8）：城市已知不再问、偏好已知不重复问——
+ * 画像读取发生在对话入口抓取入库之后，客户回答"杭州"类短消息当轮即升级为
+ * 门店热销推荐；补问维度跳过画像历史偏好已覆盖的维度。
  * 一轮一问，不与其他问题堆叠。</p>
  *
  * <p>fail-safe（决策 12）：门店/热度/画像数据任何异常 → 退回可降级文案或 null
@@ -43,6 +49,7 @@ import java.util.stream.Collectors;
 public class VagueGuidanceBuilder {
 
     private static final Logger log = LoggerFactory.getLogger(VagueGuidanceBuilder.class);
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     /** 画像渠道：#39 抓取当前仅覆盖 web 入口，macan 待稳定客户 ID 透传后接入 */
     private static final String PROFILE_CHANNEL = "web";
@@ -85,10 +92,11 @@ public class VagueGuidanceBuilder {
             return null;
         }
         try {
+            CustomerProfile profile = readProfile(userId);
             return switch (assessment.tier()) {
                 case VagueAssessment.TIER_LIGHT -> lightGuidance(assessment);
-                case VagueAssessment.TIER_MEDIUM -> mediumGuidance(assessment);
-                case VagueAssessment.TIER_DEEP -> deepGuidance(userId);
+                case VagueAssessment.TIER_MEDIUM -> mediumGuidance(assessment, profile);
+                case VagueAssessment.TIER_DEEP -> deepGuidance(profile);
                 default -> null;
             };
         } catch (Exception e) {
@@ -100,24 +108,39 @@ public class VagueGuidanceBuilder {
     // ---- 档 1：浅模糊 → 候选 top 1-2 选项确认 ----
 
     private String lightGuidance(VagueAssessment assessment) {
-        List<String> options = assessment.candidates().stream().limit(2).toList();
+        List<String> options = rankByHeat(assessment.candidates()).stream()
+                .limit(2).map(SeriesKeys::nameOf).toList();
         if (options.isEmpty()) return null;
         return "用户表述可能对应多个车系，候选：" + String.join("、", options) + "。"
                 + "请只从中挑最可能的 1-2 个作为选项让用户确认（如\"您是想了解A还是B？\"），"
                 + "不要展开介绍其他车系，不要同时问其他问题。";
     }
 
+    /** 候选键按加权热度降序（#35：档 1 给热度 top 1-2）；热度查询失败保持原序（fail-safe） */
+    private List<String> rankByHeat(List<String> seriesKeys) {
+        try {
+            return seriesKeys.stream()
+                    .sorted(Comparator.comparingDouble(askCountTracker::getWeightedHeat).reversed())
+                    .toList(); // 稳定排序：热度并列保持召回/别名原序
+        } catch (Exception e) {
+            log.warn("档 1 选项热度排序失败，保持原序: {}", e.getMessage());
+            return seriesKeys;
+        }
+    }
+
     // ---- 档 2：中模糊 → 有候选给 1-2 款，无候选补问最缺维度 ----
 
-    private String mediumGuidance(VagueAssessment assessment) {
+    private String mediumGuidance(VagueAssessment assessment, CustomerProfile profile) {
         String signalsText = describeSignals(assessment.signals());
         if (!assessment.candidates().isEmpty()) {
+            String names = assessment.candidates().stream()
+                    .map(SeriesKeys::nameOf).collect(Collectors.joining("、"));
             return "用户已给出需求信号" + signalsText + "，但未锚定具体车系。"
-                    + "资料中与之接近的候选：" + String.join("、", assessment.candidates()) + "。"
+                    + "资料中与之接近的候选：" + names + "。"
                     + "请从中推荐最合适的 1-2 款并各用一句话说明为什么适合，"
                     + "不要列更多选项，不要同时问其他问题。";
         }
-        String missing = missingDimension(assessment.signals());
+        String missing = missingDimension(assessment.signals(), profileSignalKeys(profile));
         String hint = DIMENSION_ASK_HINT.getOrDefault(missing, "预算或用途");
         return "用户已给出需求信号" + signalsText + "，但信息不足以匹配具体车系。"
                 + "请只补问最缺的一个维度——" + hint + "，一次只问这一个问题。";
@@ -125,8 +148,8 @@ public class VagueGuidanceBuilder {
 
     // ---- 档 3：深模糊 → 门店优先引导（决策 6） ----
 
-    private String deepGuidance(String userId) {
-        String city = readProfileCity(userId);
+    private String deepGuidance(CustomerProfile profile) {
+        String city = profile == null ? null : profile.city();
         if (city == null || city.isBlank()) {
             // 画像无城市 → 引导动作为反问城市，禁止静默退回全局
             return "用户没有给出明确购车需求，且不知道所在城市。"
@@ -148,7 +171,7 @@ public class VagueGuidanceBuilder {
             }
             // 门店无热度数据 → 全局热度兜底（同 BRAND 级排序源）
             List<String> global = askCountTracker.topSeriesByHeat(2).stream()
-                    .map(VagueScorer::seriesName)
+                    .map(SeriesKeys::nameOf)
                     .toList();
             if (!global.isEmpty()) {
                 return "用户没有给出明确购车需求。已知城市：" + city
@@ -165,15 +188,27 @@ public class VagueGuidanceBuilder {
                 + "不要重复询问城市。";
     }
 
-    /** 读画像城市——#39 抓取在对话入口先于本方法执行，当轮回答的城市已入库 */
-    private String readProfileCity(String userId) {
+    /** 读画像——#39 抓取在对话入口先于本方法执行，当轮回答的城市/偏好已入库 */
+    private CustomerProfile readProfile(String userId) {
         if (userId == null || userId.isBlank()) return null;
         try {
-            return profileRepository.find(PROFILE_CHANNEL, userId)
-                    .map(CustomerProfile::city).orElse(null);
+            return profileRepository.find(PROFILE_CHANNEL, userId).orElse(null);
         } catch (Exception e) {
             log.warn("画像读取失败，按无画像处理: {}", e.getMessage());
             return null;
+        }
+    }
+
+    /** 画像偏好信号键集合（跨轮已知维度）；解析失败按空集降级 */
+    private Set<String> profileSignalKeys(CustomerProfile profile) {
+        if (profile == null || profile.preferenceSignals() == null
+                || profile.preferenceSignals().isBlank()) return Set.of();
+        try {
+            Map<String, String> m = MAPPER.readValue(
+                    profile.preferenceSignals(), new TypeReference<Map<String, String>>() {});
+            return new LinkedHashSet<>(m.keySet());
+        } catch (Exception e) {
+            return Set.of();
         }
     }
 
@@ -196,10 +231,11 @@ public class VagueGuidanceBuilder {
                 .collect(Collectors.joining("、")) + "）";
     }
 
-    /** 缺失的最高优先级维度；全齐时返回 budget（保守兜底） */
-    private static String missingDimension(Map<String, String> signals) {
+    /** 缺失的最高优先级维度（本轮信号 + 画像历史偏好都算已知，决策 8 不重复问）；全齐时返回 budget 兜底 */
+    private static String missingDimension(Map<String, String> signals, Set<String> profileKnown) {
         for (String dim : MISSING_DIMENSION_ORDER) {
-            if (signals == null || !signals.containsKey(dim)) return dim;
+            boolean knownNow = signals != null && signals.containsKey(dim);
+            if (!knownNow && !profileKnown.contains(dim)) return dim;
         }
         return "budget";
     }

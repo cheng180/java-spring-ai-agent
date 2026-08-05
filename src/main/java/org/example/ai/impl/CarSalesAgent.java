@@ -4,6 +4,7 @@ import org.example.ai.impl.context.RetrievalContextAssembler;
 import org.example.ai.impl.prompt.PromptTemplates;
 import org.example.ai.impl.routing.IdleChatGate;
 import org.example.ai.impl.routing.QueryClassification;
+import org.example.ai.impl.routing.VagueAssessment;
 import org.example.ai.impl.tool.CarSalesTools;
 import org.example.ai.knowledge.entity.EntityResolver;
 import org.example.ai.knowledge.entity.ResolvedEntity;
@@ -110,7 +111,7 @@ public class CarSalesAgent implements ChatService {
     private String doChat(String userId, String userMessage, String userIp) {
         if (userMessage == null || userMessage.isBlank()) {
             logConversation(userId, userMessage == null ? "" : userMessage, BLANK_MESSAGE_REPLY,
-                    0, false, false, List.of(), null, null, false);
+                    0, false, false, List.of(), null);
             return BLANK_MESSAGE_REPLY;
         }
 
@@ -120,9 +121,7 @@ public class CarSalesAgent implements ChatService {
         boolean isIdle = isIdle(userMessage, matchedSeries);
         boolean terminated = false;
         String response;
-        QueryClassification classification = null;
-        org.example.ai.impl.routing.VagueAssessment vague = null;
-        boolean guided = false;
+        RetrievalContextAssembler.Result assembled = null;
 
         if (isIdle) {
             idleCount = idleCounters.merge(userId, 1, Integer::sum);
@@ -144,11 +143,7 @@ public class CarSalesAgent implements ChatService {
             }
 
             // 两阶段检索（#4 ticket）+ 程度评定/引导（#41 ticket）
-            RetrievalContextAssembler.Result assembled =
-                    contextAssembler.retrieveContext(userMessage, matchedSeries, userId);
-            classification = assembled.classification();
-            vague = assembled.vague();
-            guided = assembled.guidance() != null && !assembled.guidance().isBlank();
+            assembled = contextAssembler.retrieveContext(userMessage, matchedSeries, userId);
 
             // 空上下文不挂 system（Spring AI 断言文本非空；全检索落空时 buildContext 返回 ""）；
             // 引导段落经 systemText() 附加（#41），组装字节流本身不变
@@ -163,7 +158,7 @@ public class CarSalesAgent implements ChatService {
         }
 
         logConversation(userId, userMessage, response, idleCount, isIdle, terminated,
-                matchedSeries, classification, vague, guided);
+                matchedSeries, assembled);
         return response;
     }
 
@@ -211,13 +206,12 @@ public class CarSalesAgent implements ChatService {
     private void logConversation(String userId, String userMessage, String response,
                                   int idleCount, boolean isIdle, boolean terminated,
                                   List<ResolvedEntity> matchedSeries,
-                                  QueryClassification classification,
-                                  org.example.ai.impl.routing.VagueAssessment vague,
-                                  boolean guided) {
+                                  RetrievalContextAssembler.Result assembled) {
         String matchedJson = matchedSeries.stream()
                 .map(ResolvedEntity::displayName)
                 .map(this::escapeJson)
                 .collect(Collectors.joining("\",\"", "[\"", "\"]"));
+        QueryClassification classification = assembled == null ? null : assembled.classification();
         // 分类级别归因（《回复过长问题解决评估文档》加固建议 1）：
         // NONE=闲聊/未分级；BRAND/FAMILY/SERIES/UNRESTRICTED 见 QueryLevel
         String level = classification == null ? "NONE" : classification.level().name();
@@ -225,8 +219,10 @@ public class CarSalesAgent implements ChatService {
                 ? "" : classification.brand();
         // 程度归因（#41，#35 决策 9）：置信度分数/档位/是否注入引导入日志，
         // 上线后任何一轮回复可归因，分数供阈值标定（#40）；vagueTier=-1 表未评分
+        VagueAssessment vague = assembled == null ? null : assembled.vague();
         int vagueTier = vague == null ? -1 : vague.tier();
         double vagueConf = vague == null ? -1.0 : vague.confidence();
+        boolean guided = assembled != null && assembled.hasGuidance();
         String json = String.format(
                 "{\"ts\":\"%s\",\"userId\":\"%s\",\"msg\":%s,\"reply\":%s,\"idleCount\":%d,\"isIdle\":%b,\"terminated\":%b,\"matched\":%s,\"level\":\"%s\",\"levelBrand\":%s,\"vagueTier\":%d,\"vagueConf\":%.2f,\"guided\":%b}",
                 Instant.now().toString(), escapeJson(userId), escapeJson(userMessage),
@@ -248,7 +244,7 @@ public class CarSalesAgent implements ChatService {
     public Flux<String> chatStream(String userId, String userMessage, String userIp) {
         if (userMessage == null || userMessage.isBlank()) {
             logConversation(userId, userMessage == null ? "" : userMessage, "[stream-blank]",
-                    0, false, false, List.of(), null, null, false);
+                    0, false, false, List.of(), null);
             return Flux.just(BLANK_MESSAGE_REPLY);
         }
 
@@ -265,7 +261,7 @@ public class CarSalesAgent implements ChatService {
             if (idleCount > IDLE_CHAT_LIMIT) {
                 terminated = true;
                 logConversation(userId, userMessage, IDLE_TERMINATION, idleCount, true, true,
-                        matchedSeries, null, null, false);
+                        matchedSeries, null);
                 return Flux.just(IDLE_TERMINATION);
             }
         } else {
@@ -279,9 +275,8 @@ public class CarSalesAgent implements ChatService {
         // 两阶段检索（#4 ticket）+ 程度评定/引导（#41）——日志在检索后记录，携带归因字段
         RetrievalContextAssembler.Result assembled =
                 contextAssembler.retrieveContext(userMessage, matchedSeries, userId);
-        boolean guided = assembled.guidance() != null && !assembled.guidance().isBlank();
         logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated,
-                matchedSeries, assembled.classification(), assembled.vague(), guided);
+                matchedSeries, assembled);
 
         // 空上下文不挂 system（与 chat() 同步入口同守卫）；引导经 systemText() 附加（#41）
         String systemText = assembled.systemText();

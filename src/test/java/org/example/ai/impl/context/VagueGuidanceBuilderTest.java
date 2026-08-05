@@ -93,10 +93,10 @@ class VagueGuidanceBuilderTest {
     // ---- 档 1：浅模糊选项确认 ----
 
     @Test
-    @DisplayName("档 1：候选限 top 1-2 作为选项，不展开其他车系")
+    @DisplayName("档 1：候选按热度取 top 1-2 作为选项，不展开其他车系")
     void lightTierOffersTopTwoOptions() {
         VagueAssessment a = new VagueAssessment(VagueAssessment.TIER_LIGHT, 0.6,
-                List.of("秦L", "秦PLUS DM-i", "汉EV"), Map.of());
+                List.of("比亚迪-秦L", "比亚迪-秦PLUS DM-i", "比亚迪-汉EV"), Map.of());
 
         String g = builder.build(a, "u-1");
 
@@ -112,13 +112,29 @@ class VagueGuidanceBuilderTest {
                 VagueAssessment.TIER_LIGHT, 0.6, List.of(), Map.of()), "u-1")).isNull();
     }
 
+    @Test
+    @DisplayName("档 1：热度高的候选排前（#35 决策：给热度 top 1-2 选项）")
+    void lightTierRanksOptionsByHeat() {
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (1,'比亚迪','秦L')");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (2,'比亚迪','汉EV')");
+        // 汉EV 有询问热度，秦L 无 → 汉EV 排前
+        new AskCountTracker(jdbc).recordMention("比亚迪-汉EV");
+
+        VagueAssessment a = new VagueAssessment(VagueAssessment.TIER_LIGHT, 0.6,
+                List.of("比亚迪-秦L", "比亚迪-汉EV"), Map.of());
+
+        String g = builder.build(a, "u-1");
+
+        assertThat(g.indexOf("汉EV")).isLessThan(g.indexOf("秦L")); // 热度降序
+    }
+
     // ---- 档 2：中模糊匹配/补问 ----
 
     @Test
     @DisplayName("档 2 有候选 → 推荐 1-2 款并说明适合理由")
     void mediumTierWithCandidatesRecommends() {
         VagueAssessment a = new VagueAssessment(VagueAssessment.TIER_MEDIUM, 0.5,
-                List.of("宋PLUS DM-i"), Map.of("budget", "20万", "energy", "混动"));
+                List.of("比亚迪-宋PLUS DM-i"), Map.of("budget", "20万", "energy", "混动"));
 
         String g = builder.build(a, "u-1");
 
@@ -137,6 +153,22 @@ class VagueGuidanceBuilderTest {
 
         assertThat(g).contains("预算");       // 最缺维度 = budget
         assertThat(g).contains("一次只问这一个问题");
+    }
+
+    @Test
+    @DisplayName("档 2 补问维度跳过画像已知偏好（决策 8：偏好已知不重复问）")
+    void mediumTierSkipsProfileKnownDimensions() {
+        // 画像历史已记 budget → 本轮 use=通勤 时最缺维度应跳过 budget 问 carType
+        profileRepository.upsert(new CustomerProfile(
+                "web", "u-budget-known", null, null, "{\"budget\":\"20万\"}", "t", "t"));
+
+        VagueAssessment a = new VagueAssessment(VagueAssessment.TIER_MEDIUM, 0.4,
+                List.of(), Map.of("use", "通勤"));
+
+        String g = builder.build(a, "u-budget-known");
+
+        assertThat(g).contains("车型");     // 最缺维度 = carType（budget 画像已知）
+        assertThat(g).doesNotContain("预算大概"); // 不再重复问预算
     }
 
     // ---- 档 3：深模糊门店优先（决策 6） ----

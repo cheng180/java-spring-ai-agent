@@ -2,6 +2,7 @@ package org.example.ai.calibration;
 
 import org.example.ai.calibration.ThresholdCalibrator.GoldenCase;
 import org.example.ai.calibration.ThresholdCalibrator.PointReport;
+import org.example.ai.impl.context.RetrievalContextAssembler;
 import org.example.ai.impl.routing.ScoredCandidate;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -77,34 +78,20 @@ class ThresholdCalibrationLiveTest {
                 .isPresent();
     }
 
-    /** 与组装器阶段一同口径：父块相似度召回（type=车源, level=parent），topK=5 不预过滤阈值 */
+    /**
+     * 与生产阶段一父块召回同口径：复用组装器的 {@code scoredCandidates}
+     * （按车系去重取最高分、无分数文档不计入），标定 oracle 不漂移。
+     *
+     * <p>与生产的两处已知差异（均为标定所需）：topK 同为 3，但<b>不施加阈值预过滤</b>——
+     * 被标定的正是阈值本身，预过滤会截断低分证据；BM25 单边命中无相似度分数，
+     * 天然不进入标定（阈值只治理 BGE 向量路）。</p>
+     */
     private List<ScoredCandidate> parentHits(String query) {
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         Filter.Expression parentOnly = b.and(
                 b.eq("type", "车源"), b.eq("level", "parent")).build();
         List<Document> docs = vectorStore.similaritySearch(
-                SearchRequest.builder().query(query).topK(5).filterExpression(parentOnly).build());
-
-        Map<String, Double> bestBySeries = new LinkedHashMap<>();
-        for (Document d : docs) {
-            Object sid = d.getMetadata().get("series_id");
-            if (sid == null) continue;
-            double sim = similarityOf(d);
-            if (sim < 0) continue;
-            bestBySeries.merge(sid.toString(), sim, Math::max);
-        }
-        return bestBySeries.entrySet().stream()
-                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
-                .map(e -> new ScoredCandidate(e.getKey(), e.getValue()))
-                .toList();
-    }
-
-    /** 读取文档相似度（Spring AI 2.0 metadata），无分数返回 -1 */
-    private static double similarityOf(Document d) {
-        Object s = d.getMetadata().get("similarity");
-        if (s instanceof Number n) return n.doubleValue();
-        Object dist = d.getMetadata().get("distance");
-        if (dist instanceof Number n) return 1.0 / (1.0 + n.doubleValue());
-        return -1.0;
+                SearchRequest.builder().query(query).topK(3).filterExpression(parentOnly).build());
+        return RetrievalContextAssembler.scoredCandidates(docs);
     }
 }

@@ -14,7 +14,8 @@ import java.util.Map;
  *
  * @param tier       模糊档位（{@link #TIER_CLEAR}~{@link #TIER_DEEP}）
  * @param confidence 连续置信度 0~1，越高越清晰
- * @param candidates 候选车系显示名（档 1 选项引导用；其他档可为空）
+ * @param candidates 候选车系键（"品牌-车系"；档 1 由引导层按热度排序取 top 1-2，
+ *                   显示名用 {@code SeriesKeys.nameOf} 剥离品牌前缀）
  * @param signals    需求信号（budget/use/carType/energy → 命中表述）
  */
 public record VagueAssessment(int tier, double confidence, List<String> candidates, Map<String, String> signals) {

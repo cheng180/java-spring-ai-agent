@@ -37,7 +37,7 @@ class VagueScorerTest {
 
         assertThat(a.tier()).isEqualTo(VagueAssessment.TIER_CLEAR);
         assertThat(a.confidence()).isGreaterThanOrEqualTo(0.7);
-        assertThat(a.candidates()).containsExactly("宝马X3 M");
+        assertThat(a.candidates()).containsExactly("宝马-宝马X3 M"); // 车系键，显示名由引导层剥离
     }
 
     @Test
@@ -47,7 +47,7 @@ class VagueScorerTest {
                 List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i")), List.of());
 
         assertThat(a.tier()).isEqualTo(VagueAssessment.TIER_LIGHT);
-        assertThat(a.candidates()).containsExactly("秦L", "秦PLUS DM-i");
+        assertThat(a.candidates()).containsExactly("比亚迪-秦L", "比亚迪-秦PLUS DM-i");
     }
 
     // ---- 第二层：相对领先度（无别名、无需求信号） ----
@@ -61,7 +61,7 @@ class VagueScorerTest {
 
         // top1=0.62 < 0.7 但领先 0.22 明确 → 清晰（抗分数整体漂移）
         assertThat(a.tier()).isEqualTo(VagueAssessment.TIER_CLEAR);
-        assertThat(a.candidates()).containsExactly("宋PLUS DM-i");
+        assertThat(a.candidates()).containsExactly("比亚迪-宋PLUS DM-i");
     }
 
     @Test
@@ -73,7 +73,7 @@ class VagueScorerTest {
                 new ScoredCandidate("比亚迪-海鸥", 0.60)));
 
         assertThat(a.tier()).isEqualTo(VagueAssessment.TIER_LIGHT);
-        assertThat(a.candidates()).containsExactly("汉EV", "海豹"); // 只取 top2
+        assertThat(a.candidates()).containsExactly("比亚迪-汉EV", "比亚迪-海豹"); // 只取 top2
     }
 
     @Test
@@ -97,7 +97,7 @@ class VagueScorerTest {
         assertThat(a.tier()).isEqualTo(VagueAssessment.TIER_MEDIUM);
         assertThat(a.signals()).containsKeys("budget", "energy", "carType");
         // 候选只保留相似度 ≥ deep(0.5) 的（吉利星越L 0.45 被滤掉）
-        assertThat(a.candidates()).containsExactly("宋PLUS DM-i");
+        assertThat(a.candidates()).containsExactly("比亚迪-宋PLUS DM-i");
     }
 
     @Test
