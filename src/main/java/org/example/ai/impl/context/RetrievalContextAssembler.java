@@ -3,10 +3,15 @@ package org.example.ai.impl.context;
 import org.example.ai.impl.routing.QueryClassification;
 import org.example.ai.impl.routing.QueryLevel;
 import org.example.ai.impl.routing.QueryLevelClassifier;
+import org.example.ai.impl.routing.ScoredCandidate;
+import org.example.ai.impl.routing.VagueAssessment;
+import org.example.ai.impl.routing.VagueScorer;
 import org.example.ai.impl.search.HybridRetriever;
 import org.example.ai.knowledge.entity.ResolvedEntity;
 import org.example.ai.knowledge.facts.SeriesParentBuilder;
 import org.example.ai.knowledge.hotness.AskCountTracker;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
@@ -34,11 +39,21 @@ import java.util.stream.Collectors;
  * 主路径（命中车系）= 阶段一父块相似度召回（阈值配置化，默认 0.6，topK=3）+ 阶段二子块全量展开（topK=20），
  * 不注入百科/话术；回退路径（未命中）= 子块泛检索（topK=5，注入下限默认 0.5）+ 百科/话术（topK=3）。
  * 阈值外置见 #37；标定工具见 #40。</p>
+ *
+ * <p>程度打分与引导（#41 ticket，#35 规格）：程度打分与粒度分类并列进理解层——
+ * 全级别计算程度（档位/置信度）记日志，引导文案仅注入 UNRESTRICTED（档位 &gt; 0 时），
+ * 走 {@link Result#systemText()} 新字段附加，不改组装产物字节流。见
+ * {@link VagueScorer}（三层证据打分）与 {@link VagueGuidanceBuilder}（门店优先素材）。</p>
  */
 @Component
 public class RetrievalContextAssembler {
 
+    private static final Logger log = LoggerFactory.getLogger(RetrievalContextAssembler.class);
+
     private static final int RAG_TOPK = 5;
+
+    /** 引导段落标题（#41）——引导走新字段附加，不改动组装产物字节流 */
+    static final String GUIDANCE_HEADER = "## 引导提示\n";
 
     /**
      * 相似度阈值（#37 外置配置）——默认值与历史行为一致，可由配置覆盖；
@@ -80,10 +95,13 @@ public class RetrievalContextAssembler {
     private final QueryLevelClassifier classifier;
     private final AskCountTracker askCountTracker;
     private final JdbcTemplate jdbc;
+    private final VagueScorer vagueScorer;
+    private final VagueGuidanceBuilder guidanceBuilder;
 
     public RetrievalContextAssembler(HybridRetriever hybridRetriever, VectorStore vectorStore,
                                      QueryLevelClassifier classifier,
                                      AskCountTracker askCountTracker, JdbcTemplate jdbc,
+                                     VagueScorer vagueScorer, VagueGuidanceBuilder guidanceBuilder,
                                      @org.springframework.beans.factory.annotation.Value(
                                              "${retrieval.threshold.series-confidence:0.6}") double seriesConfidence,
                                      @org.springframework.beans.factory.annotation.Value(
@@ -93,22 +111,51 @@ public class RetrievalContextAssembler {
         this.classifier = classifier;
         this.askCountTracker = askCountTracker;
         this.jdbc = jdbc;
+        this.vagueScorer = vagueScorer;
+        this.guidanceBuilder = guidanceBuilder;
         this.seriesConfidence = seriesConfidence;
         this.fallbackThreshold = fallbackThreshold;
     }
 
     /**
-     * 组装结果：上下文文本 + 粒度分类结果。
-     * 分类结果随上下文返回，供对话日志记录级别归因
+     * 组装结果：上下文文本 + 粒度分类结果 + 模糊评定 + 引导文案（#41 Result 契约扩展）。
+     *
+     * <p>分类结果随上下文返回，供对话日志记录级别归因
      * （《回复过长问题解决评估文档》加固建议 1：上线后可排查"该给细节却给了摘要"）。
+     * 模糊评定（档位/置信度/候选）全级别计算并记日志；引导文案仅 UNRESTRICTED
+     * 且档位 &gt; 0 时非空，由对话入口经 {@link Result#systemText()} 附加进 system 上下文。</p>
      */
-    public record Result(String context, QueryClassification classification) {}
+    public record Result(String context, QueryClassification classification,
+                         VagueAssessment vague, String guidance) {
+
+        /**
+         * system 注入文本 = 组装上下文 + 引导段落（#41：引导走新字段拼接，
+         * context 字节流保持原样，字节级黄金锚点不破）。
+         */
+        public String systemText() {
+            boolean hasGuidance = guidance != null && !guidance.isBlank();
+            boolean hasContext = context != null && !context.isBlank();
+            if (!hasGuidance) return context;
+            if (!hasContext) return GUIDANCE_HEADER + guidance;
+            return context + "\n" + GUIDANCE_HEADER + guidance;
+        }
+    }
 
     public Result retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries) {
+        return retrieveContext(userMessage, matchedSeries, null);
+    }
+
+    /**
+     * 组装检索上下文 + 模糊程度评定（#41）。
+     *
+     * @param userId 对话入口用户 ID——档 3 门店优先引导读画像城市用；null 按无画像处理
+     */
+    public Result retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries, String userId) {
         // ---- 粒度分类（#24） ----
         QueryClassification classification = classifier.classify(userMessage, matchedSeries);
 
         String ctx;
+        List<ScoredCandidate> scoredCandidates = List.of();
         if (classification.level() == QueryLevel.BRAND) {
             ctx = assembleBrandContext(classification);
             if (ctx == null) ctx = fallbackContext(userMessage); // 品牌无在售车系数据 → 降级回退
@@ -119,11 +166,34 @@ public class RetrievalContextAssembler {
             ctx = assembleSeriesContext(classification);
             if (ctx == null) ctx = fallbackContext(userMessage); // 父块缺失 → 降级回退
         } else {
-            // ---- UNRESTRICTED：现状行为 ----
-            ctx = assembleUnrestrictedContext(userMessage, matchedSeries);
+            // ---- UNRESTRICTED：现状行为 + 程度候选证据（#41） ----
+            UnrestrictedAssembly u = assembleUnrestrictedContext(userMessage, matchedSeries);
+            ctx = u.context();
+            scoredCandidates = u.candidates();
         }
-        return new Result(ctx, classification);
+
+        // ---- 程度打分 + 引导生成（#41）——全级别打分记日志，引导仅注入 UNRESTRICTED ----
+        VagueAssessment vague = null;
+        String guidance = null;
+        try {
+            List<ScoredCandidate> evidence =
+                    classification.level() == QueryLevel.UNRESTRICTED ? scoredCandidates : List.of();
+            vague = vagueScorer.score(userMessage, matchedSeries, evidence);
+            if (classification.level() == QueryLevel.UNRESTRICTED
+                    && vague.tier() > VagueAssessment.TIER_CLEAR) {
+                guidance = guidanceBuilder.build(vague, userId);
+            }
+        } catch (Exception e) {
+            // fail-safe（#35 决策 12）：打分/引导异常 → 不注入引导，退回现状回退路径
+            log.warn("模糊打分/引导生成异常，降级为不注入引导: {}", e.getMessage());
+            vague = null;
+            guidance = null;
+        }
+        return new Result(ctx, classification, vague, guidance);
     }
+
+    /** UNRESTRICTED 组装产物：上下文字符串 + 带相似度的车系候选（程度打分证据） */
+    private record UnrestrictedAssembly(String context, List<ScoredCandidate> candidates) {}
 
     // ---- BRAND 级：品牌问句 ----
 
@@ -222,7 +292,7 @@ public class RetrievalContextAssembler {
 
     // ---- UNRESTRICTED：现状三层检索 ----
 
-    private String assembleUnrestrictedContext(String userMessage, List<ResolvedEntity> matchedSeries) {
+    private UnrestrictedAssembly assembleUnrestrictedContext(String userMessage, List<ResolvedEntity> matchedSeries) {
         // EntityResolver 命中的车系（别名匹配）
         Set<String> entitySeries = matchedSeries.stream()
                 .map(ResolvedEntity::seriesKey).collect(Collectors.toSet());
@@ -235,6 +305,10 @@ public class RetrievalContextAssembler {
         List<Document> parentDocs = hybridRetriever.search(
                 userMessage, 3, seriesConfidence, parentOnly);
 
+        // 程度打分证据（#41）：阶段一召回按车系去重取最高相似度，降序——
+        // 只取混合检索原生结果（不含下方补拉的实体父块，其查询词是 seriesId 无相似度语义）
+        List<ScoredCandidate> candidates = scoredCandidates(parentDocs);
+
         Set<String> hitSeries = new LinkedHashSet<>();
         for (Document p : parentDocs) {
             String sid = metaStr(p, "series_id");
@@ -244,7 +318,7 @@ public class RetrievalContextAssembler {
 
         // ---- 回退路径：父块相似度 + EntityResolver 都没命中任何车系 ----
         if (hitSeries.isEmpty()) {
-            return fallbackContext(userMessage);
+            return new UnrestrictedAssembly(fallbackContext(userMessage), candidates);
         }
 
         // ---- 主路径：命中车系 ----
@@ -275,7 +349,36 @@ public class RetrievalContextAssembler {
         }
 
         // 有车系锚点时跳过百科/话术（决策：避免通用知识与具体车系混淆）
-        return buildContext(parentDocs, childDocs, Collections.emptyList());
+        return new UnrestrictedAssembly(
+                buildContext(parentDocs, childDocs, Collections.emptyList()), candidates);
+    }
+
+    /**
+     * 父块召回 → 带相似度的车系候选（#41 第二/三层证据）。
+     * 按车系去重（同车系取最高分），相似度降序；无分数的文档不计入（fail-safe）。
+     */
+    private List<ScoredCandidate> scoredCandidates(List<Document> parentDocs) {
+        Map<String, Double> bestBySeries = new LinkedHashMap<>();
+        for (Document d : parentDocs) {
+            String sid = metaStr(d, "series_id");
+            if (sid == null || sid.isEmpty()) continue;
+            double sim = similarityOf(d);
+            if (sim < 0) continue; // 无分数（如 BM25 单边命中）→ 不作为相似度证据
+            bestBySeries.merge(sid, sim, Math::max);
+        }
+        return bestBySeries.entrySet().stream()
+                .sorted((a, b) -> Double.compare(b.getValue(), a.getValue()))
+                .map(e -> new ScoredCandidate(e.getKey(), e.getValue()))
+                .toList();
+    }
+
+    /** 读取文档相似度（Spring AI 2.0 metadata），无分数返回 -1 */
+    private static double similarityOf(Document d) {
+        Object s = d.getMetadata().get("similarity");
+        if (s instanceof Number n) return n.doubleValue();
+        Object dist = d.getMetadata().get("distance");
+        if (dist instanceof Number n) return 1.0 / (1.0 + n.doubleValue());
+        return -1.0;
     }
 
     /** 回退路径：子块泛检索 + 百科/话术补充（无车系锚点） */

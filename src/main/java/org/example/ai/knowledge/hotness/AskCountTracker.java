@@ -100,6 +100,86 @@ public class AskCountTracker {
     }
 
     /**
+     * 全局热门车系 topN（#41 ticket：深模糊档 3 引导的兜底候选源）。
+     *
+     * <p>与 BRAND 级排序同源：加权询问为主、销量做并列兜底（决策 6）。
+     * 热度公式与 {@link #getWeightedHeat} 一致（Σ 周询问×衰减 + 在售车型数作销量代理），
+     * 但改为单 SQL 聚合——避免深模糊轮次 N车系×8周桶 的逐点查询。</p>
+     *
+     * @param topN 返回条数
+     * @return "品牌-车系" 格式的车系 key，热度降序；无询问且无在售车源时空列表
+     */
+    public List<String> topSeriesByHeat(int topN) {
+        List<String> buckets = pastWeekBuckets(WINDOW_WEEKS);
+        Map<String, Integer> bucketIdx = new HashMap<>();
+        for (int i = 0; i < buckets.size(); i++) bucketIdx.put(buckets.get(i), i);
+
+        // 单 SQL 聚合全部车系周询问，内存加权
+        Map<String, Double> weighted = new HashMap<>();
+        List<Map<String, Object>> askRows = jdbc.queryForList(
+                "SELECT series_key, week_bucket, ask_count FROM series_ask_count");
+        for (Map<String, Object> r : askRows) {
+            Integer idx = bucketIdx.get(String.valueOf(r.get("week_bucket")));
+            if (idx == null) continue; // 过期周桶不参与
+            weighted.merge(String.valueOf(r.get("series_key")),
+                    ((Number) r.get("ask_count")).doubleValue() * DECAY[idx], Double::sum);
+        }
+
+        // 销量代理：各车系在售车型数（与 countActiveSkus 口径一致，单 GROUP BY）
+        Map<String, Integer> skuCounts = new HashMap<>();
+        List<Map<String, Object>> skuRows = jdbc.queryForList(
+                "SELECT brand_name || '-' || series_name AS series_key, COUNT(*) AS c "
+                + "FROM car_sku WHERE sale_status = 1 AND is_deleted = 0 "
+                + "GROUP BY brand_name, series_name");
+        for (Map<String, Object> r : skuRows) {
+            skuCounts.put(String.valueOf(r.get("series_key")), ((Number) r.get("c")).intValue());
+        }
+
+        Map<String, Long> sales = loadGlobalSalesSafe();
+
+        Set<String> allKeys = new LinkedHashSet<>(weighted.keySet());
+        allKeys.addAll(skuCounts.keySet());
+
+        return allKeys.stream()
+                .sorted((a, b) -> {
+                    double ha = weighted.getOrDefault(a, 0.0) + skuCounts.getOrDefault(a, 0);
+                    double hb = weighted.getOrDefault(b, 0.0) + skuCounts.getOrDefault(b, 0);
+                    int byHeat = Double.compare(hb, ha);
+                    if (byHeat != 0) return byHeat;
+                    int bySales = Long.compare(sales.getOrDefault(seriesNameOf(b), 0L),
+                            sales.getOrDefault(seriesNameOf(a), 0L));
+                    if (bySales != 0) return bySales;
+                    return a.compareTo(b); // 全并列时确定性兜底
+                })
+                .limit(topN)
+                .toList();
+    }
+
+    /** 门店×车系销量表按车系全局求和（并列兜底数据源；表不可用静默降级为空） */
+    private Map<String, Long> loadGlobalSalesSafe() {
+        Map<String, Long> sales = new HashMap<>();
+        try {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT series_name, SUM(sale_count) AS total FROM store_car_hot GROUP BY series_name");
+            for (Map<String, Object> row : rows) {
+                Number total = (Number) row.get("total");
+                if (row.get("series_name") != null && total != null) {
+                    sales.put(String.valueOf(row.get("series_name")), total.longValue());
+                }
+            }
+        } catch (Exception e) {
+            // 销量表不可用时静默降级为纯热度排序（与组装器 loadGlobalSales 同策略）
+        }
+        return sales;
+    }
+
+    /** "比亚迪-宋PLUS DM-i" → "宋PLUS DM-i"（store_car_hot 按车系名存销量） */
+    private static String seriesNameOf(String seriesKey) {
+        int idx = seriesKey == null ? -1 : seriesKey.indexOf('-');
+        return idx > 0 ? seriesKey.substring(idx + 1) : seriesKey;
+    }
+
+    /**
      * 清理超过 8 周的旧数据。
      * 在启动时调用或定时任务调用。
      */

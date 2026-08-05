@@ -1,7 +1,14 @@
 package org.example.ai.impl.context;
 
 import org.example.ai.config.DynamicKeywordBuilder;
+import org.example.ai.impl.location.HotCarRepository;
+import org.example.ai.impl.location.StoreLocator;
+import org.example.ai.impl.profile.CustomerProfileRepository;
+import org.example.ai.impl.profile.CustomerProfileSchema;
+import org.example.ai.impl.profile.NeedSignalDetector;
 import org.example.ai.impl.routing.QueryLevelClassifier;
+import org.example.ai.impl.routing.VagueAssessment;
+import org.example.ai.impl.routing.VagueScorer;
 import org.example.ai.impl.search.HybridRetriever;
 import org.example.ai.knowledge.entity.ResolvedEntity;
 import org.junit.jupiter.api.AfterEach;
@@ -28,10 +35,11 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * RetrievalContextAssembler 测试（#23 黄金锚点 + #24 车系级分层）。
+ * RetrievalContextAssembler 测试（#23 黄金锚点 + #24 车系级分层 + #41 程度评定/引导契约）。
  *
  * <p>UNRESTRICTED 用例锁定迁移前现状行为（字节级零回归守卫）；
- * SERIES 用例断言分层后的新行为（单系列父块 + 级别指令，零子块调用）。</p>
+ * SERIES 用例断言分层后的新行为（单系列父块 + 级别指令，零子块调用）；
+ * #41 用例断言 Result 新契约（档位/置信度/引导走新字段，上下文字节流不变）。</p>
  */
 @ExtendWith(MockitoExtension.class)
 class RetrievalContextAssemblerTest {
@@ -60,15 +68,31 @@ class RetrievalContextAssemblerTest {
         jdbc.execute("CREATE TABLE store_car_hot (id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + " store_id INTEGER NOT NULL, series_name TEXT NOT NULL,"
                 + " sale_count INTEGER DEFAULT 0, inquiry_count INTEGER DEFAULT 0, stat_date DATE)");
+        // #41 引导素材所需表：门店 + 询问热度 + 画像
+        jdbc.execute("CREATE TABLE store_config (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + " store_name TEXT NOT NULL, store_code TEXT UNIQUE NOT NULL, address TEXT NOT NULL,"
+                + " phone TEXT, working_hours TEXT DEFAULT '9:00-18:00', region TEXT,"
+                + " latitude REAL DEFAULT 0, longitude REAL DEFAULT 0, is_active INTEGER DEFAULT 1)");
+        jdbc.execute("CREATE TABLE series_ask_count (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + " series_key TEXT NOT NULL, week_bucket TEXT NOT NULL, ask_count INTEGER DEFAULT 0,"
+                + " UNIQUE(series_key, week_bucket))");
+        CustomerProfileSchema.create(jdbc);
         keywordBuilder = new DynamicKeywordBuilder(jdbc);
         rebuildAssembler();
     }
 
     private void rebuildAssembler() {
+        rebuildAssemblerWith(new VagueScorer(new NeedSignalDetector(), 0.7, 0.6, 0.5, 0.15, 0.05));
+    }
+
+    private void rebuildAssemblerWith(VagueScorer scorer) {
         keywordBuilder.rebuild();
+        VagueGuidanceBuilder guidanceBuilder = new VagueGuidanceBuilder(
+                new StoreLocator(jdbc), new HotCarRepository(jdbc),
+                askCountTracker, new CustomerProfileRepository(jdbc));
         assembler = new RetrievalContextAssembler(hybridRetriever, vectorStore,
                 new QueryLevelClassifier(keywordBuilder), askCountTracker, jdbc,
-                0.6, 0.5);
+                scorer, guidanceBuilder, 0.6, 0.5);
     }
 
     @AfterEach
@@ -160,7 +184,11 @@ class RetrievalContextAssemblerTest {
     void thresholdsAreInjectable() {
         RetrievalContextAssembler custom = new RetrievalContextAssembler(
                 hybridRetriever, vectorStore, new QueryLevelClassifier(keywordBuilder),
-                askCountTracker, jdbc, 0.42, 0.31);
+                askCountTracker, jdbc,
+                new VagueScorer(new NeedSignalDetector(), 0.7, 0.6, 0.5, 0.15, 0.05),
+                new VagueGuidanceBuilder(new StoreLocator(jdbc), new HotCarRepository(jdbc),
+                        askCountTracker, new CustomerProfileRepository(jdbc)),
+                0.42, 0.31);
         when(hybridRetriever.search(anyString(), anyInt(), anyDouble(), any(Filter.Expression.class)))
                 .thenReturn(new java.util.ArrayList<>());
 
@@ -378,6 +406,127 @@ class RetrievalContextAssemblerTest {
         String ctx = assembler.retrieveContext("比亚迪", four).context();
 
         assertThat(ctx).contains("回退子块"); // 降级回退而非越界异常
+    }
+
+    // ---- #41：Result 契约扩展——程度评定 + 引导走新字段 ----
+
+    @Test
+    @DisplayName("#41: UNRESTRICTED 回退零信号 → 档 3 + 城市反问引导，上下文字节流原样")
+    void unrestrictedFallbackGetsDeepTierGuidance() {
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.6), any(Filter.Expression.class)))
+                .thenReturn(new java.util.ArrayList<>());
+        Document child = doc("某车源子块", Map.of("level", "child"));
+        Document kb = doc("购车话术段落", Map.of("type", "话术"));
+        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(kb));
+
+        RetrievalContextAssembler.Result r =
+                assembler.retrieveContext("买车要注意什么", List.of(), "user-1");
+
+        // 上下文字节流与黄金锚点完全一致（引导不进 context）
+        assertThat(r.context()).isEqualTo(
+                "\n## 在售车型\n"
+                + "- 某车源子块\n"
+                + "\n"
+                + "## 相关知识\n"
+                + "- [话术] 购车话术段落\n");
+        // 程度评定：零别名零信号 → 深模糊
+        assertThat(r.vague()).isNotNull();
+        assertThat(r.vague().tier()).isEqualTo(VagueAssessment.TIER_DEEP);
+        // 引导走新字段：无画像城市 → 反问城市（禁止静默退回全局）
+        assertThat(r.guidance()).contains("哪个城市");
+        // systemText = context + 引导段落拼接
+        assertThat(r.systemText()).isEqualTo(r.context() + "\n## 引导提示\n" + r.guidance());
+    }
+
+    @Test
+    @DisplayName("#41: UNRESTRICTED 候选咬得近 → 档 1 选项引导，主路径上下文字节不变")
+    void unrestrictedCloseCandidatesGetLightTierGuidance() {
+        Document p1 = doc("【比亚迪 汉EV】车系信息\n在售车型：1款",
+                Map.of("series_id", "比亚迪-汉EV", "level", "parent", "similarity", 0.66));
+        Document p2 = doc("【比亚迪 海豹】车系信息\n在售车型：1款",
+                Map.of("series_id", "比亚迪-海豹", "level", "parent", "similarity", 0.64));
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.6), any(Filter.Expression.class)))
+                .thenReturn(new java.util.ArrayList<>(List.of(p1, p2)));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
+
+        RetrievalContextAssembler.Result r =
+                assembler.retrieveContext("有什么好开的车", List.of(), "user-1");
+
+        // 主路径上下文照旧（段标题 + 父块文本，无引导混入）
+        assertThat(r.context()).isEqualTo(
+                "## 匹配车系\n"
+                + "【比亚迪 汉EV】车系信息\n在售车型：1款\n"
+                + "【比亚迪 海豹】车系信息\n在售车型：1款\n");
+        assertThat(r.vague().tier()).isEqualTo(VagueAssessment.TIER_LIGHT);
+        assertThat(r.guidance()).contains("汉EV").contains("海豹").contains("确认");
+    }
+
+    @Test
+    @DisplayName("#41: BRAND 级——程度照算并记日志，但不注入引导（级别指令不叠加）")
+    void brandLevelComputesDegreeWithoutGuidance() {
+        seedSku(1, "比亚迪", "宋PLUS DM-i");
+        seedSku(2, "比亚迪", "汉EV");
+        rebuildAssembler();
+        when(askCountTracker.getWeightedHeat(anyString())).thenReturn(1.0);
+
+        RetrievalContextAssembler.Result r = assembler.retrieveContext("有比亚迪吗", List.of(), "user-1");
+
+        assertThat(r.classification().level())
+                .isEqualTo(org.example.ai.impl.routing.QueryLevel.BRAND);
+        assertThat(r.vague()).isNotNull();       // 程度照算（供日志归因）
+        assertThat(r.guidance()).isNull();        // 引导只注入 UNRESTRICTED
+        assertThat(r.systemText()).isEqualTo(r.context());
+    }
+
+    @Test
+    @DisplayName("#41: SERIES 级单别名命中 → 档 0 清晰，不注入引导")
+    void seriesLevelIsClearWithoutGuidance() {
+        ResolvedEntity re = new ResolvedEntity(
+                "entity:car:比亚迪:汉ev", "比亚迪-汉EV", "比亚迪", "汉EV");
+        Document parent = doc("【比亚迪 汉EV】车系信息\n在售车型：1款",
+                Map.of("series_id", "比亚迪-汉EV"));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(parent));
+
+        RetrievalContextAssembler.Result r = assembler.retrieveContext("汉EV怎么样", List.of(re), "user-1");
+
+        assertThat(r.vague().tier()).isEqualTo(VagueAssessment.TIER_CLEAR);
+        assertThat(r.guidance()).isNull();
+        assertThat(r.systemText()).isEqualTo(r.context());
+    }
+
+    @Test
+    @DisplayName("#41: 打分异常 → fail-safe 降级为不注入引导（上下文照常返回）")
+    void scoringFailureDegradesToNoGuidance() {
+        rebuildAssemblerWith(null); // 打分器缺失 → 组装器内部 NPE 被捕获
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.6), any(Filter.Expression.class)))
+                .thenReturn(new java.util.ArrayList<>());
+        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of());
+        when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of());
+
+        RetrievalContextAssembler.Result r =
+                assembler.retrieveContext("买车要注意什么", List.of(), "user-1");
+
+        assertThat(r.context()).isNotNull();  // 上下文组装不受影响
+        assertThat(r.vague()).isNull();
+        assertThat(r.guidance()).isNull();
+        assertThat(r.systemText()).isEqualTo(r.context());
+    }
+
+    @Test
+    @DisplayName("#41: Result.systemText——空上下文 + 引导 → 仅引导段落；无引导 → context 原样")
+    void systemTextEdgeCases() {
+        RetrievalContextAssembler.Result noGuidance =
+                new RetrievalContextAssembler.Result("ctx", null, null, null);
+        assertThat(noGuidance.systemText()).isEqualTo("ctx");
+
+        RetrievalContextAssembler.Result guidanceOnly =
+                new RetrievalContextAssembler.Result("", null, null, "反问城市");
+        assertThat(guidanceOnly.systemText()).isEqualTo("## 引导提示\n反问城市");
     }
 
     // ---- helpers ----

@@ -209,6 +209,69 @@ class AskCountTrackerTest {
         assertThat(bucket).isEqualTo(wy + "-W" + String.format("%02d", ww));
     }
 
+    // ---- #41：全局热门车系 topN（深模糊档 3 引导兜底候选源） ----
+
+    @Test
+    @DisplayName("#41 topSeriesByHeat：加权询问 + 在售车型数降序，与 getWeightedHeat 同源")
+    void topSeriesByHeatRanksByWeightedAskPlusSkuProxy() {
+        List<String> buckets = AskCountTracker.pastWeekBuckets(8);
+        // 汉EV：当前周 10 次询问 + 2 在售车型 → heat 12
+        jdbc.update("INSERT INTO series_ask_count (series_key, week_bucket, ask_count) VALUES (?,?,?)",
+                "比亚迪-汉EV", buckets.get(0), 10);
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (1,'比亚迪','汉EV',1)");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (2,'比亚迪','汉EV',1)");
+        // 海鸥：当前周 2 次询问 + 1 在售车型 → heat 3
+        jdbc.update("INSERT INTO series_ask_count (series_key, week_bucket, ask_count) VALUES (?,?,?)",
+                "比亚迪-海鸥", buckets.get(0), 2);
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (3,'比亚迪','海鸥',1)");
+        // 秦L：无询问，3 在售车型 → heat 3（销量代理兜底，与海鸥并列）
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (4,'比亚迪','秦L',1)");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (5,'比亚迪','秦L',1)");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (6,'比亚迪','秦L',1)");
+
+        List<String> top = tracker.topSeriesByHeat(2);
+
+        assertThat(top).hasSize(2);
+        assertThat(top.get(0)).isEqualTo("比亚迪-汉EV");
+        assertThat(top.get(1)).isIn("比亚迪-海鸥", "比亚迪-秦L");
+    }
+
+    @Test
+    @DisplayName("#41 topSeriesByHeat：热度并列 → store_car_hot 销量兜底排序（BRAND 级同源）")
+    void topSeriesByHeatUsesSalesTieBreak() {
+        jdbc.execute("CREATE TABLE store_car_hot (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                + " store_id INTEGER NOT NULL, series_name TEXT NOT NULL,"
+                + " sale_count INTEGER DEFAULT 0, inquiry_count INTEGER DEFAULT 0, stat_date DATE)");
+        try {
+            // 两车系热度完全一致（各 1 在售车型、无询问）
+            jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (1,'比亚迪','汉EV',1)");
+            jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (2,'比亚迪','海鸥',1)");
+            // 销量：汉EV 30 > 海鸥 10 → 汉EV 排前
+            jdbc.update("INSERT INTO store_car_hot (store_id, series_name, sale_count, stat_date)"
+                    + " VALUES (1,'汉EV',30,date('now'))");
+            jdbc.update("INSERT INTO store_car_hot (store_id, series_name, sale_count, stat_date)"
+                    + " VALUES (1,'海鸥',10,date('now'))");
+
+            List<String> top = tracker.topSeriesByHeat(2);
+
+            assertThat(top).containsExactly("比亚迪-汉EV", "比亚迪-海鸥");
+        } finally {
+            jdbc.execute("DROP TABLE store_car_hot");
+        }
+    }
+
+    @Test
+    @DisplayName("#41 topSeriesByHeat：无询问无在售车源 → 空列表；topN 截断生效")
+    void topSeriesByHeatEmptyAndTruncation() {
+        assertThat(tracker.topSeriesByHeat(3)).isEmpty();
+
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (1,'比亚迪','汉EV',1)");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (2,'比亚迪','海鸥',1)");
+        jdbc.update("INSERT INTO car_sku (id, brand_name, series_name, sale_status) VALUES (3,'比亚迪','秦L',1)");
+
+        assertThat(tracker.topSeriesByHeat(2)).hasSize(2);
+    }
+
     private String currentWeekBucket() {
         return AskCountTracker.currentWeekBucket();
     }
