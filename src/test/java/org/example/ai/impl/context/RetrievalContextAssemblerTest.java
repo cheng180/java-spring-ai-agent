@@ -67,7 +67,8 @@ class RetrievalContextAssemblerTest {
     private void rebuildAssembler() {
         keywordBuilder.rebuild();
         assembler = new RetrievalContextAssembler(hybridRetriever, vectorStore,
-                new QueryLevelClassifier(keywordBuilder), askCountTracker, jdbc);
+                new QueryLevelClassifier(keywordBuilder), askCountTracker, jdbc,
+                0.6, 0.5);
     }
 
     @AfterEach
@@ -150,6 +151,27 @@ class RetrievalContextAssemblerTest {
                 + "## 相关知识\n"
                 + "- [话术] 购车话术段落\n");
         verify(vectorStore, never()).similaritySearch(any(SearchRequest.class));
+    }
+
+    // ---- #37：相似度阈值外置——构造注入，行为随值而动 ----
+
+    @Test
+    @DisplayName("#37: 相似度阈值可注入——非默认阈值按注入值检索（父块召回 + 回退注入下限）")
+    void thresholdsAreInjectable() {
+        RetrievalContextAssembler custom = new RetrievalContextAssembler(
+                hybridRetriever, vectorStore, new QueryLevelClassifier(keywordBuilder),
+                askCountTracker, jdbc, 0.42, 0.31);
+        when(hybridRetriever.search(anyString(), anyInt(), anyDouble(), any(Filter.Expression.class)))
+                .thenReturn(new java.util.ArrayList<>());
+
+        // 无实体无关键词 → UNRESTRICTED：阶段一父块召回落空 → 回退泛检索
+        custom.retrieveContext("买车要注意什么", List.of());
+
+        // 阶段一父块召回用注入的 0.42
+        verify(hybridRetriever).search(anyString(), eq(3), eq(0.42), any(Filter.Expression.class));
+        // 回退路径子块泛检索 + 百科话术用注入的 0.31
+        verify(hybridRetriever).search(anyString(), eq(5), eq(0.31), any(Filter.Expression.class));
+        verify(hybridRetriever).search(anyString(), eq(3), eq(0.31), any(Filter.Expression.class));
     }
 
     // ---- #24：SERIES 级分层（单车系命中） ----

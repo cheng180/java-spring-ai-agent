@@ -31,15 +31,21 @@ import java.util.stream.Collectors;
  * </ul>
  *
  * <p>未受限路径（#4 ticket，2026-07-29）：
- * 主路径（命中车系）= 阶段一父块相似度召回（阈值 0.6，topK=3）+ 阶段二子块全量展开（topK=20），
- * 不注入百科/话术；回退路径（未命中）= 子块泛检索（topK=5）+ 百科/话术（topK=3）。</p>
+ * 主路径（命中车系）= 阶段一父块相似度召回（阈值配置化，默认 0.6，topK=3）+ 阶段二子块全量展开（topK=20），
+ * 不注入百科/话术；回退路径（未命中）= 子块泛检索（topK=5，注入下限默认 0.5）+ 百科/话术（topK=3）。
+ * 阈值外置见 #37；标定工具见 #40。</p>
  */
 @Component
 public class RetrievalContextAssembler {
 
     private static final int RAG_TOPK = 5;
-    private static final double RAG_THRESHOLD = 0.5;
-    private static final double SERIES_CONFIDENCE = 0.6;
+
+    /**
+     * 相似度阈值（#37 外置配置）——默认值与历史行为一致，可由配置覆盖；
+     * 标定依据与工具见 #40（黄金集 + 阈值标定）。
+     */
+    private final double seriesConfidence;
+    private final double fallbackThreshold;
 
     /** BRAND 级级别指令：只报车系名、只推一款、反问收尾、禁止列清单、本轮禁调库存工具 */
     static final String BRAND_INSTRUCTION =
@@ -77,12 +83,18 @@ public class RetrievalContextAssembler {
 
     public RetrievalContextAssembler(HybridRetriever hybridRetriever, VectorStore vectorStore,
                                      QueryLevelClassifier classifier,
-                                     AskCountTracker askCountTracker, JdbcTemplate jdbc) {
+                                     AskCountTracker askCountTracker, JdbcTemplate jdbc,
+                                     @org.springframework.beans.factory.annotation.Value(
+                                             "${retrieval.threshold.series-confidence:0.6}") double seriesConfidence,
+                                     @org.springframework.beans.factory.annotation.Value(
+                                             "${retrieval.threshold.rag-fallback:0.5}") double fallbackThreshold) {
         this.hybridRetriever = hybridRetriever;
         this.vectorStore = vectorStore;
         this.classifier = classifier;
         this.askCountTracker = askCountTracker;
         this.jdbc = jdbc;
+        this.seriesConfidence = seriesConfidence;
+        this.fallbackThreshold = fallbackThreshold;
     }
 
     /**
@@ -221,7 +233,7 @@ public class RetrievalContextAssembler {
                 b.eq("type", "车源"), b.eq("level", "parent")).build();
 
         List<Document> parentDocs = hybridRetriever.search(
-                userMessage, 3, SERIES_CONFIDENCE, parentOnly);
+                userMessage, 3, seriesConfidence, parentOnly);
 
         Set<String> hitSeries = new LinkedHashSet<>();
         for (Document p : parentDocs) {
@@ -272,11 +284,11 @@ public class RetrievalContextAssembler {
         Filter.Expression childOnly = b.and(
                 b.eq("type", "车源"), b.eq("level", "child")).build();
         List<Document> childDocs = hybridRetriever.search(
-                userMessage, RAG_TOPK, RAG_THRESHOLD, childOnly);
+                userMessage, RAG_TOPK, fallbackThreshold, childOnly);
 
         Filter.Expression nonCar = new FilterExpressionBuilder().ne("type", "车源").build();
         List<Document> knowledgeDocs = hybridRetriever.search(
-                userMessage, 3, RAG_THRESHOLD, nonCar);
+                userMessage, 3, fallbackThreshold, nonCar);
 
         return buildContext(Collections.emptyList(), childDocs, knowledgeDocs);
     }
