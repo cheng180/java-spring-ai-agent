@@ -58,17 +58,20 @@ public class CarSalesAgent implements ChatService {
     private final EntityResolver entityResolver;
     private final IdleChatGate idleChatGate;
     private final RetrievalContextAssembler contextAssembler;
+    private final org.example.ai.impl.profile.CustomerProfileService profileService;
 
     public CarSalesAgent(ChatModel chatModel, CarSalesTools tools,
                          @Value("${company.name}") String companyName,
                          AskCountTracker askCountTracker,
                          EntityResolver entityResolver,
                          IdleChatGate idleChatGate,
-                         RetrievalContextAssembler contextAssembler) {
+                         RetrievalContextAssembler contextAssembler,
+                         org.example.ai.impl.profile.CustomerProfileService profileService) {
         this.askCountTracker = askCountTracker;
         this.entityResolver = entityResolver;
         this.idleChatGate = idleChatGate;
         this.contextAssembler = contextAssembler;
+        this.profileService = profileService;
 
         ChatMemoryRepository repo = new InMemoryChatMemoryRepository();
         this.chatMemory = MessageWindowChatMemory.builder()
@@ -92,7 +95,7 @@ public class CarSalesAgent implements ChatService {
     }
 
     /**
-     * 处理用户消息。
+     * 处理用户消息（Web 入口；画像渠道 = web）。
      *
      * @param userId      用户标识（会话隔离）
      * @param userMessage 用户消息文本
@@ -100,6 +103,11 @@ public class CarSalesAgent implements ChatService {
      */
     @Override
     public String chat(String userId, String userMessage, String userIp) {
+        profileService.capture("web", userId, userMessage); // #39 画像抓取（失败不阻断）
+        return doChat(userId, userMessage, userIp);
+    }
+
+    private String doChat(String userId, String userMessage, String userIp) {
         if (userMessage == null || userMessage.isBlank()) {
             logConversation(userId, userMessage == null ? "" : userMessage, BLANK_MESSAGE_REPLY,
                     0, false, false, List.of(), null);
@@ -162,6 +170,8 @@ public class CarSalesAgent implements ChatService {
      * macan 历史灌入 ChatMemory（供 MemoryAdvisor 使用），用完即清空，
      * 避免不同客户串话、也避免内存随请求数堆积。
      *
+     * <p>画像抓取（#39）当前仅覆盖 web 入口；macan 通道待其稳定客户 ID 透传后接入。</p>
+     *
      * @param conversationId 一次性会话 id（每请求唯一）
      * @param userMessage    当前客户消息
      * @param history        macan Redis 历史（user/assistant 交替，不含当前消息；system 已过滤）
@@ -174,7 +184,8 @@ public class CarSalesAgent implements ChatService {
             if (history != null && !history.isEmpty()) {
                 chatMemory.add(conversationId, history);
             }
-            return chat(conversationId, userMessage, "macan-server");
+            // 走 doChat 而非 chat()：macan 通道暂不做画像抓取，避免以一次性会话 id 误建 web 画像
+            return doChat(conversationId, userMessage, "macan-server");
         } finally {
             chatMemory.clear(conversationId);
         }
@@ -220,7 +231,7 @@ public class CarSalesAgent implements ChatService {
     }
 
     /**
-     * 处理用户消息（流式输出，SSE）。
+     * 处理用户消息（流式输出，SSE；画像渠道 = web）。
      */
     @Override
     public Flux<String> chatStream(String userId, String userMessage, String userIp) {
@@ -229,6 +240,8 @@ public class CarSalesAgent implements ChatService {
                     0, false, false, List.of(), null);
             return Flux.just(BLANK_MESSAGE_REPLY);
         }
+
+        profileService.capture("web", userId, userMessage); // #39 画像抓取（失败不阻断）
 
         List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
 
