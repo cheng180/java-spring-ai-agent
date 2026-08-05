@@ -157,9 +157,6 @@ public class DatabaseInitializer implements CommandLineRunner {
             )
         """);
 
-        // 客户画像表 — 对话线索（位置/电话/偏好）沉淀（#39 ticket）
-        org.example.ai.impl.profile.CustomerProfileSchema.create(jdbc);
-
         log.info("数据库表创建完成");
     }
 

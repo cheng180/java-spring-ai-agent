@@ -12,7 +12,7 @@ import java.util.List;
  * <ul>
  *   <li><b>Interface</b>：3 个方法，参数都是基础类型 + 标准 Message</li>
  *   <li><b>Implementation</b>：两阶段混合检索（BM25 + BGE-M3）、EntityResolver 别名匹配、
- *       查询粒度分级、ChatMemory 会话管理、LLM Tool Calling、
+ *       VagueQueryRouter 三层路由、ChatMemory 会话管理、LLM Tool Calling、
  *       热度追踪、防幻觉 prompt 工程等全部隐藏</li>
  * </ul>
  *
