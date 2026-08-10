@@ -1,5 +1,6 @@
 package org.example.ai.config.observability;
 
+import io.micrometer.observation.ObservationPredicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -26,7 +27,14 @@ import java.util.Base64;
  *   <li>{@link OtlpTracingConnectionDetails} —— 告诉导出器 Langfuse 的 OTLP 接收 URL
  *       （{@code <endpoint>/api/public/otel/v1/traces}）；</li>
  *   <li>{@link OtlpHttpSpanExporterBuilderCustomizer} —— 注入 HTTP Basic 认证头
- *       （Langfuse 以 public-key 为用户名、secret-key 为密码）。</li>
+ *       （Langfuse 以 public-key 为用户名、secret-key 为密码）与
+ *       {@code x-langfuse-ingestion-version: 4} 协议头（自托管 Langfuse v4 为
+ *       events_only 数据模型，v4 头选择新摄取路径：observation 级 input/output、
+ *       trace 级 name/session/user 按 v4 规则映射）；</li>
+ *   <li>{@link ObservationPredicate} —— 拒绝 {@code http.server.requests}
+ *       观测：对话轮次已有业务根 span（{@code chat-turn}，见 CarSalesAgent），
+ *       HTTP 层 span 只会让 Langfuse 多出健康检查、静态资源等噪音 trace，
+ *       且会把 trace 名变成 "http post /api/chat"。</li>
  * </ol>
  *
  * <p><strong>松耦合</strong>（对应需求"没有 Langfuse 启动，项目也能正常运行"）：</p>
@@ -52,6 +60,9 @@ public class LangfuseObservabilityConfig {
     /** key 占位值标记（application.properties 默认值），用于识别"还没拿到真实 key" */
     private static final String UNCONFIGURED_MARKER = "not-set";
 
+    /** Spring MVC 服务端请求观测名（Boot/micrometer 固定值） */
+    static final String HTTP_SERVER_OBSERVATION = "http.server.requests";
+
     @Bean
     OtlpTracingConnectionDetails langfuseOtlpConnectionDetails(LangfuseProperties properties) {
         String endpoint = trimTrailingSlash(properties.getEndpoint());
@@ -64,7 +75,21 @@ public class LangfuseObservabilityConfig {
         String credentials = properties.getPublicKey() + ":" + properties.getSecretKey();
         String basicAuth = "Basic " + Base64.getEncoder()
                 .encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
-        return builder -> builder.addHeader("Authorization", basicAuth);
+        return builder -> builder
+                .addHeader("Authorization", basicAuth)
+                .addHeader("x-langfuse-ingestion-version", "4");
+    }
+
+    /**
+     * 拒绝 HTTP 服务端请求观测，让业务根 span（chat-turn / knowledge-sync）成为 trace 根。
+     *
+     * <p>不拒绝的后果：每个健康检查、静态资源请求都是一条 trace；对话 trace 的根变成
+     * "http post /api/chat"，业务名与 session/user 属性反而挂在子 span 上。
+     * 本应用没有独立消费 http.server.requests 观测的指标导出，拒绝无副作用。</p>
+     */
+    @Bean
+    ObservationPredicate langfuseNoiseReductionPredicate() {
+        return (name, context) -> !HTTP_SERVER_OBSERVATION.equals(name);
     }
 
     private static void warnIfKeysUnconfigured(LangfuseProperties properties) {

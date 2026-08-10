@@ -1,5 +1,7 @@
 package org.example.ai.config.observability;
 
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationPredicate;
 import io.micrometer.observation.ObservationRegistry;
 import io.micrometer.tracing.Tracer;
 import io.opentelemetry.exporter.otlp.http.trace.OtlpHttpSpanExporter;
@@ -22,8 +24,10 @@ import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * LangfuseObservabilityConfig 装配测试。
@@ -128,7 +132,7 @@ class LangfuseObservabilityConfigTest {
     }
 
     @Test
-    @DisplayName("认证头：Basic base64(publicKey:secretKey) 注入导出器请求头")
+    @DisplayName("认证头：Basic base64(publicKey:secretKey) + v4 摄取协议头注入导出器请求头")
     void authHeaderIsBasicAuthOfKeyPair() {
         contextRunner
                 .withPropertyValues(
@@ -141,11 +145,35 @@ class LangfuseObservabilityConfigTest {
                             context.getBean(OtlpHttpSpanExporterBuilderCustomizer.class);
 
                     OtlpHttpSpanExporterBuilder builder = mock(OtlpHttpSpanExporterBuilder.class);
+                    // 定制器链式调用 addHeader，mock 需返回自身
+                    when(builder.addHeader(anyString(), anyString())).thenReturn(builder);
                     customizer.customize(builder);
 
                     String expected = "Basic " + Base64.getEncoder()
                             .encodeToString("pk-lf-test:sk-lf-test".getBytes(StandardCharsets.UTF_8));
                     verify(builder).addHeader("Authorization", expected);
+                    // Langfuse v4 为 events_only 数据模型：v4 头选择新摄取路径，
+                    // observation 级 input/output 与 trace 级 session/user 按 v4 规则映射
+                    verify(builder).addHeader("x-langfuse-ingestion-version", "4");
+                });
+    }
+
+    @Test
+    @DisplayName("噪音抑制：http.server.requests 观测被拒绝，其余观测放行")
+    void httpServerObservationsAreDenied() {
+        contextRunner
+                .withPropertyValues("langfuse.enabled=true")
+                .run(context -> {
+                    assertThat(context).hasNotFailed();
+                    // 按 bean 名取本配置的谓词（Boot 自动装配可能另注册 predicate，如 propertiesObservationFilter）
+                    ObservationPredicate predicate = context.getBean(
+                            "langfuseNoiseReductionPredicate", ObservationPredicate.class);
+                    Observation.Context httpServer = new Observation.Context();
+                    Observation.Context chatModel = new Observation.Context();
+
+                    assertThat(predicate.test(LangfuseObservabilityConfig.HTTP_SERVER_OBSERVATION, httpServer))
+                            .isFalse();
+                    assertThat(predicate.test("chat deepseek-chat", chatModel)).isTrue();
                 });
     }
 }

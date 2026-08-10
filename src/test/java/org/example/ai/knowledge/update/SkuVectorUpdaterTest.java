@@ -37,7 +37,8 @@ class SkuVectorUpdaterTest {
 
         skuExtractor = new SkuFactExtractor(jdbc);
         var parentBuilder = new SeriesParentBuilder(jdbc, skuExtractor, askCountTracker);
-        updater = new SkuVectorUpdater(vectorStore, skuExtractor, parentBuilder, jdbc, indexRefresher);
+        updater = new SkuVectorUpdater(vectorStore, skuExtractor, parentBuilder, jdbc, indexRefresher,
+                io.micrometer.observation.ObservationRegistry.NOOP);
     }
 
     @Test

@@ -1,6 +1,8 @@
 package org.example.ai.knowledge;
 
+import org.example.ai.config.observability.SyncObservationSupport;
 import org.example.ai.knowledge.update.SkuVectorUpdater;
+import io.micrometer.observation.ObservationRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
@@ -28,17 +30,27 @@ public class CarSkuVectorIndexer implements CommandLineRunner {
     private static final Logger log = LoggerFactory.getLogger(CarSkuVectorIndexer.class);
 
     private final SkuVectorUpdater updater;
+    private final ObservationRegistry observationRegistry;
 
-    public CarSkuVectorIndexer(SkuVectorUpdater updater) {
+    public CarSkuVectorIndexer(SkuVectorUpdater updater, ObservationRegistry observationRegistry) {
         this.updater = updater;
+        this.observationRegistry = observationRegistry;
     }
 
     @Override
     public void run(String... args) {
-        log.info("=== 开始同步车源向量（哈希增量模式） ===");
-        Map<String, Integer> stats = updater.syncChangedSkus();
-        log.info("=== 车源向量同步完成：变更 {} 条，未变 {} 条，清理 {} 条，父块 {} 个 ===",
-                stats.get("changed"), stats.get("unchanged"),
-                stats.get("deleted"), stats.get("parentsBuilt"));
+        // 整次车源向量同步包进一条 knowledge-sync 观测：所有 embedding / chroma
+        // 子操作挂同一 trace，不再按操作碎成几百条独立 trace（Langfuse 链路治理）
+        try {
+            SyncObservationSupport.trace(observationRegistry, "car-sku", () -> {
+                log.info("=== 开始同步车源向量（哈希增量模式） ===");
+                Map<String, Integer> stats = updater.syncChangedSkus();
+                log.info("=== 车源向量同步完成：变更 {} 条，未变 {} 条，清理 {} 条，父块 {} 个 ===",
+                        stats.get("changed"), stats.get("unchanged"),
+                        stats.get("deleted"), stats.get("parentsBuilt"));
+            });
+        } catch (Exception e) {
+            throw new IllegalStateException("车源向量同步失败", e);
+        }
     }
 }

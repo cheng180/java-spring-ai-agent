@@ -1,8 +1,10 @@
 package org.example.ai.knowledge.update;
 
+import org.example.ai.config.observability.SyncObservationSupport;
 import org.example.ai.knowledge.facts.AtomicFact;
 import org.example.ai.knowledge.facts.SeriesParentBuilder;
 import org.example.ai.knowledge.facts.SkuFactExtractor;
+import io.micrometer.observation.ObservationRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -34,28 +36,40 @@ public class SkuVectorUpdater implements SkuChangeListener {
     private final SeriesParentBuilder parentBuilder;
     private final JdbcTemplate jdbc;
     private final InMemoryIndexRefresher indexRefresher;
+    private final ObservationRegistry observationRegistry;
 
     public SkuVectorUpdater(VectorStore vectorStore,
                             SkuFactExtractor skuFactExtractor,
                             SeriesParentBuilder parentBuilder,
                             JdbcTemplate jdbc,
-                            InMemoryIndexRefresher indexRefresher) {
+                            InMemoryIndexRefresher indexRefresher,
+                            ObservationRegistry observationRegistry) {
         this.vectorStore = vectorStore;
         this.skuFactExtractor = skuFactExtractor;
         this.parentBuilder = parentBuilder;
         this.jdbc = jdbc;
         this.indexRefresher = indexRefresher;
+        this.observationRegistry = observationRegistry;
     }
 
     // ---- SkuChangeListener 接口实现 ----
 
     @Override
     public void onSkuChanged(SkuChangeEvent event) {
-        log.info("SkuVectorUpdater: 收到变更事件 - {}", event);
-        processChange(event);
-        // 广播下半场：刷新问答侧内存知识结构（BM25/实体索引/关键词表），
-        // 否则 Chroma 虽已更新，检索与路由仍用旧数据 → "必须重启才生效"
-        indexRefresher.refreshAll();
+        // 运行时 SKU 变更同步同样包进一条 knowledge-sync trace（与启动同步同治理）
+        try {
+            SyncObservationSupport.trace(observationRegistry, "sku-change", () -> {
+                log.info("SkuVectorUpdater: 收到变更事件 - {}", event);
+                processChange(event);
+                // 广播下半场：刷新问答侧内存知识结构（BM25/实体索引/关键词表），
+                // 否则 Chroma 虽已更新，检索与路由仍用旧数据 → "必须重启才生效"
+                indexRefresher.refreshAll();
+            });
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("SKU 向量同步失败: " + event, e);
+        }
     }
 
     // ---- 核心同步逻辑 ----

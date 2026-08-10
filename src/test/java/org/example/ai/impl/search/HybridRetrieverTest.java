@@ -40,7 +40,7 @@ class HybridRetrieverTest {
                 new HybridRetriever.RankedDoc("d5", "汉EV 纯电", 0.7, null)
         );
 
-        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null)
+        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null, io.micrometer.observation.ObservationRegistry.NOOP)
                 .rrfFuse(bm25, bge, 5);
 
         assertThat(fused).isNotEmpty();
@@ -64,7 +64,7 @@ class HybridRetrieverTest {
         );
         var empty = List.<HybridRetriever.RankedDoc>of();
 
-        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null)
+        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null, io.micrometer.observation.ObservationRegistry.NOOP)
                 .rrfFuse(bm25, empty, 3);
 
         assertThat(fused).hasSize(3);
@@ -88,7 +88,7 @@ class HybridRetrieverTest {
                 new HybridRetriever.RankedDoc("7", "doc7", 0.8, null)
         );
 
-        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null)
+        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null, io.micrometer.observation.ObservationRegistry.NOOP)
                 .rrfFuse(bm25, bge, 3);
 
         assertThat(fused).hasSize(3);
@@ -98,7 +98,7 @@ class HybridRetrieverTest {
     @DisplayName("RRF: 空输入 → 返回空列表")
     void rrfEmptyInputReturnsEmpty() {
         var empty = List.<HybridRetriever.RankedDoc>of();
-        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null)
+        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null, io.micrometer.observation.ObservationRegistry.NOOP)
                 .rrfFuse(empty, empty, 5);
         assertThat(fused).isEmpty();
     }
@@ -115,7 +115,7 @@ class HybridRetrieverTest {
                 new HybridRetriever.RankedDoc("vec1", "本田思域 混动轿车 省油", 0.9, null) // 同文本！
         );
 
-        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null)
+        List<HybridRetriever.RankedDoc> fused = new HybridRetriever(null, null, io.micrometer.observation.ObservationRegistry.NOOP)
                 .rrfFuse(bm25, bge, 5);
 
         // 应该只有 2 条结果（思域去重 + 卡罗拉）

@@ -1,6 +1,8 @@
 package org.example.ai.impl.context;
 
 import org.example.ai.impl.routing.QueryClassification;
+import org.example.ai.config.observability.ObservationSupport;
+import io.micrometer.observation.ObservationRegistry;
 import org.example.ai.impl.routing.QueryLevel;
 import org.example.ai.impl.routing.QueryLevelClassifier;
 import org.example.ai.impl.search.HybridRetriever;
@@ -12,6 +14,7 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -74,15 +77,24 @@ public class RetrievalContextAssembler {
     private final QueryLevelClassifier classifier;
     private final AskCountTracker askCountTracker;
     private final JdbcTemplate jdbc;
+    private final ObservationRegistry observationRegistry;
 
     public RetrievalContextAssembler(HybridRetriever hybridRetriever, VectorStore vectorStore,
                                      QueryLevelClassifier classifier,
                                      AskCountTracker askCountTracker, JdbcTemplate jdbc) {
+        this(hybridRetriever, vectorStore, classifier, askCountTracker, jdbc, ObservationRegistry.NOOP);
+    }
+
+    @Autowired
+    public RetrievalContextAssembler(HybridRetriever hybridRetriever, VectorStore vectorStore,
+                                     QueryLevelClassifier classifier,
+                                     AskCountTracker askCountTracker, JdbcTemplate jdbc, ObservationRegistry observationRegistry) {
         this.hybridRetriever = hybridRetriever;
         this.vectorStore = vectorStore;
         this.classifier = classifier;
         this.askCountTracker = askCountTracker;
         this.jdbc = jdbc;
+        this.observationRegistry = observationRegistry;
     }
 
     /**
@@ -93,6 +105,10 @@ public class RetrievalContextAssembler {
     public record Result(String context, QueryClassification classification) {}
 
     public Result retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries) {
+        return ObservationSupport.call(observationRegistry, "agent.retrieval", null, () -> retrieveContextInternal(userMessage, matchedSeries));
+    }
+
+    private Result retrieveContextInternal(String userMessage, List<ResolvedEntity> matchedSeries) {
         // ---- 粒度分类（#24） ----
         QueryClassification classification = classifier.classify(userMessage, matchedSeries);
 
