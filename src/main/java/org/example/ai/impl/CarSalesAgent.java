@@ -1,6 +1,8 @@
 package org.example.ai.impl;
 
 import org.example.ai.impl.context.RetrievalContextAssembler;
+import org.example.ai.impl.conversation.ConversationGuidance;
+import org.example.ai.impl.conversation.ConversationGuidanceBuilder;
 import org.example.ai.impl.prompt.PromptTemplates;
 import org.example.ai.impl.routing.IdleChatGate;
 import org.example.ai.impl.routing.QueryClassification;
@@ -8,11 +10,6 @@ import org.example.ai.impl.tool.CarSalesTools;
 import org.example.ai.knowledge.entity.EntityResolver;
 import org.example.ai.knowledge.entity.ResolvedEntity;
 import org.example.ai.knowledge.hotness.AskCountTracker;
-import org.example.ai.impl.location.GeoLocation;
-import org.example.ai.impl.location.GeoLocator;
-import org.example.ai.impl.location.StoreLocator;
-import org.example.ai.impl.routing.MatchResult;
-import org.example.ai.impl.routing.VagueQueryRouter;
 import org.example.ai.ChatService;
 import org.example.ai.config.observability.ObservationSupport;
 import io.micrometer.observation.Observation;
@@ -75,9 +72,7 @@ public class CarSalesAgent implements ChatService {
     private final AskCountTracker askCountTracker;
     private final EntityResolver entityResolver;
     private final IdleChatGate idleChatGate;
-    private final VagueQueryRouter router;
-    private final GeoLocator geoLocator;
-    private final StoreLocator storeLocator;
+    private final ConversationGuidanceBuilder guidanceBuilder;
     private final RetrievalContextAssembler contextAssembler;
     private final ObservationRegistry observationRegistry;
 
@@ -86,17 +81,13 @@ public class CarSalesAgent implements ChatService {
                          AskCountTracker askCountTracker,
                          EntityResolver entityResolver,
                          IdleChatGate idleChatGate,
-                         VagueQueryRouter router,
-                         GeoLocator geoLocator,
-                         StoreLocator storeLocator,
+                         ConversationGuidanceBuilder guidanceBuilder,
                          RetrievalContextAssembler contextAssembler,
                          ObservationRegistry observationRegistry) {
         this.askCountTracker = askCountTracker;
         this.entityResolver = entityResolver;
         this.idleChatGate = idleChatGate;
-        this.router = router;
-        this.geoLocator = geoLocator;
-        this.storeLocator = storeLocator;
+        this.guidanceBuilder = guidanceBuilder;
         this.contextAssembler = contextAssembler;
         this.observationRegistry = observationRegistry;
 
@@ -181,37 +172,32 @@ public class CarSalesAgent implements ChatService {
                 askCountTracker.recordMention(e.seriesKey());
             }
 
-            // VagueQueryRouter 路由（#13 ticket）
             String historyText = buildHistoryText(userId);
-            MatchResult route = ObservationSupport.call(observationRegistry, "agent.route", null, () -> router.route(userMessage, historyText, userIp));
+            final List<ResolvedEntity> inputEntities = matchedSeries;
+            ConversationGuidance guidance = ObservationSupport.call(
+                    observationRegistry, "agent.conversation-understanding", null,
+                    () -> guidanceBuilder.build(userMessage, historyText, inputEntities));
+            matchedSeries = guidance.entities();
 
-            if (route != null && route.needsConfirm()) {
-                // BRAND 或 VAGUE+确认 → 直接返回追问文本，不调 LLM
-                response = route.followUpText();
-            } else {
-                // EXACT / null → 走两阶段检索（#4 ticket）
-                RetrievalContextAssembler.Result assembled =
-                        contextAssembler.retrieveContext(userMessage, matchedSeries);
-                classification = assembled.classification();
-                String ragContext = assembled.context();
-
-                // VAGUE + needsInference → 追问文本注入 system prompt
-                if (route != null && route.needsInference() && route.followUpText() != null) {
-                    ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
-                }
-
-                // 空上下文不挂 system（Spring AI 断言文本非空；全检索落空时 buildContext 返回 ""）
-                ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
-                        .user(userMessage)
-                        .advisors(a -> a.param("chat_memory_conversation_id", userId));
-                if (ragContext != null && !ragContext.isBlank()) {
-                    spec = spec.system(ragContext);
-                }
-                final ChatClient.ChatClientRequestSpec llmSpec = spec;
-                response = ObservationSupport.call(observationRegistry, "agent.llm", null, () -> llmSpec.call().content());
+            // 模糊语义只提供内部指导和有效检索词，不再绕过主 Agent 直接回答。
+            RetrievalContextAssembler.Result assembled =
+                    contextAssembler.retrieveContext(guidance.retrievalQuery(), matchedSeries);
+            classification = assembled.classification();
+            String ragContext = assembled.context();
+            if (!guidance.prompt().isBlank()) {
+                ragContext = ragContext + "\n" + guidance.prompt();
             }
-        }
 
+            // 空上下文不挂 system（Spring AI 断言文本非空；全检索落空时 buildContext 返回 ""）
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
+                    .user(userMessage)
+                    .advisors(a -> a.param("chat_memory_conversation_id", userId));
+            if (ragContext != null && !ragContext.isBlank()) {
+                spec = spec.system(ragContext);
+            }
+            final ChatClient.ChatClientRequestSpec llmSpec = spec;
+            response = ObservationSupport.call(observationRegistry, "agent.llm", null, () -> llmSpec.call().content());
+        }
         logConversation(userId, userMessage, response, idleCount, isIdle, terminated,
                 matchedSeries, classification);
         return response;
@@ -222,7 +208,7 @@ public class CarSalesAgent implements ChatService {
      *
      * macan 每次请求都带上 Redis 全量历史，且 IAIService.chatReply(List&lt;Message&gt;) 接口
      * 无法透传 userId，因此本路径不依赖 AI 项目自身的跨请求记忆：用一次性会话 id，先把
-     * macan 历史灌入 ChatMemory（供 MemoryAdvisor 与 VagueQueryRouter 使用），用完即清空，
+     * macan 历史灌入 ChatMemory（供 MemoryAdvisor 与 Agent 内部对话理解使用），用完即清空，
      * 避免不同客户串话、也避免内存随请求数堆积。
      *
      * @param conversationId 一次性会话 id（每请求唯一）
@@ -274,7 +260,7 @@ public class CarSalesAgent implements ChatService {
         return entityResolver.resolve(message);
     }
 
-    /** 提取最近 10 轮对话历史文本（供 VagueQueryRouter L3 使用）。 */
+    /** 提取最近 10 轮对话历史文本（供 Agent 内部对话理解使用）。 */
     private String buildHistoryText(String userId) {
         List<org.springframework.ai.chat.messages.Message> messages = chatMemory.get(userId);
         if (messages == null || messages.isEmpty()) return "";
@@ -366,26 +352,20 @@ public class CarSalesAgent implements ChatService {
                 }
             }
 
-            // VagueQueryRouter 路由（#13 ticket）
             String historyText = buildHistoryText(userId);
-            MatchResult route = ObservationSupport.call(observationRegistry, "agent.route", null, () -> router.route(userMessage, historyText, userIp));
-
-            if (route != null && route.needsConfirm()) {
-                logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated,
-                        matchedSeries, null);
-                String followUp = route.followUpText();
-                return Flux.just(followUp)
-                        .doFinally(signal -> stopTurnWithOutput(turn, followUp));
-            }
-
+            final List<ResolvedEntity> inputEntities = matchedSeries;
+            ConversationGuidance guidance = ObservationSupport.call(
+                    observationRegistry, "agent.conversation-understanding", null,
+                    () -> guidanceBuilder.build(userMessage, historyText, inputEntities));
+            matchedSeries = guidance.entities();
             // 两阶段检索（#4 ticket）——日志在检索后记录，携带分类级别归因
             RetrievalContextAssembler.Result assembled =
-                    contextAssembler.retrieveContext(userMessage, matchedSeries);
+                    contextAssembler.retrieveContext(guidance.retrievalQuery(), matchedSeries);
             logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated,
                     matchedSeries, assembled.classification());
             String ragContext = assembled.context();
-            if (route != null && route.needsInference() && route.followUpText() != null) {
-                ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
+            if (!guidance.prompt().isBlank()) {
+                ragContext = ragContext + "\n" + guidance.prompt();
             }
 
             // 空上下文不挂 system（与 chat() 同步入口同守卫）；spec 须 effectively final 供订阅期 lambda 使用

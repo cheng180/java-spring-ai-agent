@@ -43,6 +43,8 @@ public class RetrievalContextAssembler {
     private static final int RAG_TOPK = 5;
     private static final double RAG_THRESHOLD = 0.5;
     private static final double SERIES_CONFIDENCE = 0.6;
+    /** 多车系细节查询的整轮子块预算，避免按车系 topK 叠加放大上下文。 */
+    private static final int CHILD_DOCS_TOTAL_LIMIT = 30;
 
     /** BRAND 级级别指令：只报车系名、只推一款、反问收尾、禁止列清单、本轮禁调库存工具 */
     static final String BRAND_INSTRUCTION =
@@ -266,6 +268,7 @@ public class RetrievalContextAssembler {
         List<Document> childDocs = new ArrayList<>();
         Set<Object> seenSkuIds = new HashSet<>();
         FilterExpressionBuilder cb = new FilterExpressionBuilder();
+        childLoop:
         for (String sid : hitSeries) {
             Filter.Expression cf = cb.and(
                     cb.eq("type", "车源"),
@@ -273,6 +276,7 @@ public class RetrievalContextAssembler {
             ).build();
             for (Document c : vectorStore.similaritySearch(
                     SearchRequest.builder().query(sid).topK(20).filterExpression(cf).build())) {
+                if (childDocs.size() >= CHILD_DOCS_TOTAL_LIMIT) break childLoop;
                 Object skuId = c.getMetadata().get("sku_id");
                 if (skuId != null && seenSkuIds.add(skuId)) childDocs.add(c);
             }
@@ -282,7 +286,7 @@ public class RetrievalContextAssembler {
         return buildContext(parentDocs, childDocs, Collections.emptyList());
     }
 
-    /** 回退路径：子块泛检索 + 百科/话术补充（无车系锚点） */
+    /** 回退路径：子块泛检索 + 百科/话术补充（无车系锚点）。 */
     private String fallbackContext(String userMessage) {
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         Filter.Expression childOnly = b.and(
