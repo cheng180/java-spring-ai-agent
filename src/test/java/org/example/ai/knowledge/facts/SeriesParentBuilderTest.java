@@ -90,7 +90,8 @@ class SeriesParentBuilderTest {
         assertThat(f.getTemporalType()).isEqualTo(TemporalType.DYNAMIC);
         assertThat(f.getSourceDoc()).isEqualTo("car_sku表");
         assertThat(f.getSourceHash()).isNotNull().hasSize(64);
-        assertThat(f.getContent()).contains("比亚迪", "雪域白", "15.88万", "杭州猛禽");
+        // 新 render 只保留指导价（16.98万），不再输出全款销售价（sale_price）
+        assertThat(f.getContent()).contains("比亚迪", "宋PLUS DM-i", "雪域白", "16.98万", "杭州猛禽");
         assertThat(f.getMetadata()).containsEntry("level", "child");
         assertThat(f.getMetadata()).containsEntry("parent_series_id", "比亚迪-宋PLUS DM-i");
     }

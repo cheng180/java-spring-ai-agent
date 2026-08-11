@@ -135,9 +135,9 @@ class RetrievalContextAssemblerTest {
         Document child = doc("某车源子块", Map.of("level", "child"));
         Document kb = doc("购车话术段落", Map.of("type", "话术"));
         // 第一次调用=子块泛检索，第二次=百科/话术
-        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
-                .thenReturn(List.of(child));
         when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(2), eq(0.5), any(Filter.Expression.class)))
                 .thenReturn(List.of(kb));
 
         String ctx = assembler.retrieveContext("买车要注意什么", List.of()).context();
@@ -182,9 +182,9 @@ class RetrievalContextAssemblerTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
 
         Document child = doc("回退子块", Map.of("level", "child"));
-        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
-                .thenReturn(List.of(child));
         when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(2), eq(0.5), any(Filter.Expression.class)))
                 .thenReturn(List.of());
 
         String ctx = assembler.retrieveContext("已下架车系", List.of(re)).context();
@@ -193,8 +193,8 @@ class RetrievalContextAssemblerTest {
     }
 
     @Test
-    @DisplayName("#32 SERIES 级：上下文全量保留价格 + 级别指令带披露约束（未问价不报价）")
-    void seriesLevelKeepsFullContextWithDisclosureInstruction() {
+    @DisplayName("价格门控：客户未问价 → SERIES 级上下文物理剥离价格（渐进式披露第一层）")
+    void seriesLevelStripsPriceWhenNoInquiry() {
         ResolvedEntity re = new ResolvedEntity(
                 "entity:car:宝马:宝马x3-m", "宝马-宝马X3 M", "宝马", "宝马X3 M");
         Document parent = doc("【宝马 宝马X3 M】车系信息\n价格区间：101.11万 ~ 101.11万\n"
@@ -204,11 +204,29 @@ class RetrievalContextAssemblerTest {
 
         String ctx = assembler.retrieveContext("我想买宝马X3 M", List.of(re)).context();
 
-        // 上下文全量：价格仍在上下文中（客服的知识必须在场，不做物理剥离）
+        // 客户没问价：价格数字从上下文剥离，模型无价可抄
+        assertThat(ctx).doesNotContain("价格区间");
+        assertThat(ctx).doesNotContain("全款101.11万");
+        assertThat(ctx).contains("雷霆版"); // 车型名保留（第一层仍可介绍定位/亮点）
+        // 级别指令仍带披露约束（双保险）
+        assertThat(ctx).contains("用户没明确问价就不要报");
+    }
+
+    @Test
+    @DisplayName("价格门控：客户问价 → 上下文保留价格")
+    void seriesLevelKeepsPriceWhenAskingPrice() {
+        ResolvedEntity re = new ResolvedEntity(
+                "entity:car:宝马:宝马x3-m", "宝马-宝马X3 M", "宝马", "宝马X3 M");
+        Document parent = doc("【宝马 宝马X3 M】车系信息\n价格区间：101.11万 ~ 101.11万\n"
+                + "在售款型：\n  - 雷霆版 | 全款101.11万\n",
+                Map.of("series_id", "宝马-宝马X3 M"));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(parent));
+
+        String ctx = assembler.retrieveContext("宝马X3 M多少钱", List.of(re)).context();
+
+        // 客户明确问价：价格保留在上下文（第三层披露）
         assertThat(ctx).contains("价格区间：101.11万 ~ 101.11万");
         assertThat(ctx).contains("全款101.11万");
-        // 级别指令携带披露约束：披露边界在回复层
-        assertThat(ctx).contains("用户没明确问价就不要报");
     }
 
     // ---- #25：BRAND 级分层（品牌问句） ----
@@ -285,8 +303,7 @@ class RetrievalContextAssemblerTest {
         String ctx = assembler.retrieveContext("比亚迪秦",
                 List.of(entity("比亚迪", "秦L"), entity("比亚迪", "秦PLUS DM-i"))).context();
 
-        assertThat(ctx).contains("价格区间：10.00万 ~ 14.00万");  // 摘要保留
-        assertThat(ctx).contains("价格区间：8.00万 ~ 12.00万");
+        assertThat(ctx).doesNotContain("价格区间");             // 未问价 → 价格剥离
         assertThat(ctx).doesNotContain("秦L 2026款");              // 车型清单被截断
         assertThat(ctx).doesNotContain("秦PLUS 荣耀版");
         assertThat(ctx).doesNotContain("在售款型：");
@@ -327,9 +344,9 @@ class RetrievalContextAssemblerTest {
         when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of());
 
         Document child = doc("回退子块", Map.of("level", "child"));
-        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
-                .thenReturn(List.of(child));
         when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(2), eq(0.5), any(Filter.Expression.class)))
                 .thenReturn(List.of());
 
         String ctx = assembler.retrieveContext("比亚迪秦",
@@ -348,9 +365,9 @@ class RetrievalContextAssemblerTest {
                 entity("比亚迪", "车系C"), entity("比亚迪", "车系D"));
 
         Document child = doc("回退子块", Map.of("level", "child"));
-        when(hybridRetriever.search(anyString(), eq(5), eq(0.5), any(Filter.Expression.class)))
-                .thenReturn(List.of(child));
         when(hybridRetriever.search(anyString(), eq(3), eq(0.5), any(Filter.Expression.class)))
+                .thenReturn(List.of(child));
+        when(hybridRetriever.search(anyString(), eq(2), eq(0.5), any(Filter.Expression.class)))
                 .thenReturn(List.of());
 
         String ctx = assembler.retrieveContext("比亚迪", four).context();

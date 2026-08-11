@@ -28,7 +28,8 @@ public class CarSalesTools {
 
     /** 防止模型误调用时把全量 SKU 回流上下文。 */
     private static final int SEARCH_MATCHED_LIMIT = 30;
-    private static final int ALL_CARS_LIMIT = 30;
+    /** 全库存摘要上限：只给模型"心里有数"的最小信息，避免 30 条车源诱导超量推荐。 */
+    private static final int ALL_CARS_LIMIT = 15;
     private final JdbcTemplate jdbc;
     private final StoreLocator storeLocator;
     private final PositionStackGeoLocator geocoder;
@@ -51,8 +52,10 @@ public class CarSalesTools {
      * @param query 用户原始输入或 LLM 提取的关键词
      */
     @org.springframework.ai.tool.annotation.Tool(description = """
-        搜索公司车辆库存，返回匹配车源的详细信息（品牌、车系、车型、颜色、售价、能源类型等）。
-        当用户询问具体品牌或车型时调用此工具。参数 query 可以是品牌名、车系名或用户原话。
+        搜索公司车辆库存，返回匹配车源的详细信息（品牌、车系、车型、颜色、价格、能源类型等）。
+        仅在客户询问具体品牌/车型、或明确问价格/配置/库存时调用此工具。
+        客户只是泛泛求推荐（没说具体车、没问价）时不要调用，用 getAllCars 即可。
+        参数 query 可以是品牌名、车系名或用户原话。
         """)
     public String searchInventory(String query) {
         log.info("Tool调用: searchInventory('{}')", query);
@@ -89,14 +92,14 @@ public class CarSalesTools {
         sb.append("匹配到 ").append(rows.size()).append(" 条车源：\n");
         for (int i = 0; i < rows.size(); i++) {
             Map<String, Object> r = rows.get(i);
-            sb.append(String.format("%d. %s | %s | 指导价%s | 全款%s | 金融%s | %s\n",
+            // 客户视角：通俗车系名（品牌+车系）+ 单一价格（指导价），不输出完整款型名
+            Object price = r.get("guide_price");
+            sb.append(String.format("%d. %s %s | %s | 价格%s | %s\n",
                     i + 1,
-                    r.get("model_name"),
+                    r.get("brand_name"),
+                    r.get("series_name"),
                     r.get("outer_color_name"),
-                    r.get("guide_price"),
-                    fenToWan(r.get("sale_price")),
-                    fenToWan(r.get("sale_price_finance")),
-
+                    price == null || price.toString().isBlank() ? "待询" : price,
                     energyType(r.get("energy_type"))));
             Object memo = r.get("memo");
             if (memo != null && !memo.toString().isBlank()) {
@@ -183,8 +186,9 @@ public class CarSalesTools {
      * 获取全库存摘要（用于推荐场景）
      */
     @org.springframework.ai.tool.annotation.Tool(description = """
-        获取公司所有在售车源的摘要列表。当用户希望推荐车型但没指定具体品牌时调用，
-        以便从库存中挑选合适的车推荐给用户。
+        获取公司所有在售车源的摘要列表（仅车系名 + 能源类型，不含价格、不含颜色）。
+        当用户希望推荐车型但没指定具体品牌时调用，用于心里有数、挑选合适的车系推荐。
+        注意：本工具不返回价格——客户没问价就绝不能报价格；客户问价/要具体车源细节时用 searchInventory。
         """)
     public String getAllCars() {
         log.info("Tool调用: getAllCars()");
@@ -195,14 +199,14 @@ public class CarSalesTools {
         if (rows.isEmpty()) return "当前没有在售车源。";
 
         StringBuilder sb = new StringBuilder();
-        sb.append("当前在售车源摘要（最多返回 ").append(ALL_CARS_LIMIT).append(" 条）：\n");
+        sb.append("当前在售车系摘要（最多返回 ").append(ALL_CARS_LIMIT)
+                .append(" 条，仅车系级概括，不含价格与颜色）：\n");
         for (int i = 0; i < rows.size(); i++) {
             Map<String, Object> r = rows.get(i);
-            sb.append(String.format("%d. %s | %s | 全款%s | %s\n",
+            sb.append(String.format("%d. %s %s（%s）\n",
                     i + 1,
-                    r.get("model_name"),
-                    r.get("outer_color_name"),
-                    fenToWan(r.get("sale_price")),
+                    r.get("brand_name"),
+                    r.get("series_name"),
                     energyType(r.get("energy_type"))));
         }
         return sb.toString();
