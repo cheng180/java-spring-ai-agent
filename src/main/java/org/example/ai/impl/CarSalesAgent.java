@@ -1,19 +1,19 @@
 package org.example.ai.impl;
 
 import org.example.ai.impl.context.RetrievalContextAssembler;
+import org.example.ai.impl.conversation.ConversationGuidance;
+import org.example.ai.impl.conversation.ConversationGuidanceBuilder;
 import org.example.ai.impl.prompt.PromptTemplates;
+import org.example.ai.impl.routing.IdleChatGate;
 import org.example.ai.impl.routing.QueryClassification;
 import org.example.ai.impl.tool.CarSalesTools;
-import org.example.ai.config.DynamicKeywordBuilder;
 import org.example.ai.knowledge.entity.EntityResolver;
 import org.example.ai.knowledge.entity.ResolvedEntity;
 import org.example.ai.knowledge.hotness.AskCountTracker;
-import org.example.ai.impl.location.GeoLocation;
-import org.example.ai.impl.location.GeoLocator;
-import org.example.ai.impl.location.StoreLocator;
-import org.example.ai.impl.routing.MatchResult;
-import org.example.ai.impl.routing.VagueQueryRouter;
 import org.example.ai.ChatService;
+import org.example.ai.config.observability.ObservationSupport;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -52,53 +52,44 @@ public class CarSalesAgent implements ChatService {
     private static final int IDLE_CHAT_LIMIT = 3;
     private static final String IDLE_TERMINATION = "买车的事随时找我，先不打扰您了～有需要再聊！";
 
+    /** 空消息固定引导——空串不能进 ChatClient（Spring AI 对 user/system 文本断言非空） */
+    private static final String BLANK_MESSAGE_REPLY = "您想了解点什么呢？说说想看的车或者预算，我帮您参谋～";
+
+    // ---- Langfuse 链路观测：一轮对话 = 一条以 chat-turn 为根的完整 trace ----
+    /** 对话轮次根观测名（Langfuse trace 名取自根 span 名） */
+    private static final String TURN_OBSERVATION = "chat-turn";
+    /** Langfuse v4 OTLP 映射属性：trace 级会话/用户身份（低基数，可筛选） */
+    private static final String ATTR_SESSION_ID = "langfuse.session.id";
+    private static final String ATTR_USER_ID = "langfuse.user.id";
+    /** Langfuse v4 OTLP 映射属性：observation 级输入/输出（挂在根 span 即整轮对话的输入/输出） */
+    private static final String ATTR_INPUT = "langfuse.observation.input";
+    private static final String ATTR_OUTPUT = "langfuse.observation.output";
+
     private final Map<String, Integer> idleCounters = new ConcurrentHashMap<>();
 
     private final ChatClient chatClient;
     private final ChatMemory chatMemory;
     private final AskCountTracker askCountTracker;
     private final EntityResolver entityResolver;
-    private final DynamicKeywordBuilder keywordBuilder;
-    private final VagueQueryRouter router;
-    private final GeoLocator geoLocator;
-    private final StoreLocator storeLocator;
+    private final IdleChatGate idleChatGate;
+    private final ConversationGuidanceBuilder guidanceBuilder;
     private final RetrievalContextAssembler contextAssembler;
-
-    /** 通用汽车话题词（不含品牌/车系名——那一侧由 DynamicKeywordBuilder + EntityResolver 覆盖，#12 ticket） */
-    private static final Set<String> CAR_TOPIC_WORDS = Set.of(
-            "买车", "购车", "看车", "试驾", "订车", "提车",
-            "多少钱", "报价", "价格", "售价", "指导价", "落地价", "优惠",
-            "库存", "现车", "有货", "多久提车",
-            "suv", "mpv", "轿车", "新能源", "纯电", "混动", "油车", "电车", "增程",
-            "耗油", "续航", "配置", "性能", "空间",
-            "门店", "地址", "电话", "在哪里", "在哪", "怎么去",
-            "到店", "预约", "试驾车", "转人工", "销售",
-            "推荐", "预算", "家用", "代步", "通勤", "性价比",
-            // 汽车配置/特征词（防止"全景天窗""有没有混动版"等被判为闲聊）
-            "天窗", "全景", "真皮", "座椅", "加热", "通风", "气囊",
-            "雷达", "影像", "导航", "巡航", "自动泊车", "日行灯",
-            "排量", "油耗", "加速", "极速", "马力", "扭矩", "驱动",
-            "四驱", "两驱", "前驱", "后驱", "手动挡", "自动挡",
-            "跑车", "超跑", "敞篷", "越野", "皮卡", "旅行版",
-            "有没有", "有没有卖", "有没有现车", "能不能", "可不可以"
-    );
+    private final ObservationRegistry observationRegistry;
 
     public CarSalesAgent(ChatModel chatModel, CarSalesTools tools,
                          @Value("${company.name}") String companyName,
                          AskCountTracker askCountTracker,
                          EntityResolver entityResolver,
-                         DynamicKeywordBuilder keywordBuilder,
-                         VagueQueryRouter router,
-                         GeoLocator geoLocator,
-                         StoreLocator storeLocator,
-                         RetrievalContextAssembler contextAssembler) {
+                         IdleChatGate idleChatGate,
+                         ConversationGuidanceBuilder guidanceBuilder,
+                         RetrievalContextAssembler contextAssembler,
+                         ObservationRegistry observationRegistry) {
         this.askCountTracker = askCountTracker;
         this.entityResolver = entityResolver;
-        this.keywordBuilder = keywordBuilder;
-        this.router = router;
-        this.geoLocator = geoLocator;
-        this.storeLocator = storeLocator;
+        this.idleChatGate = idleChatGate;
+        this.guidanceBuilder = guidanceBuilder;
         this.contextAssembler = contextAssembler;
+        this.observationRegistry = observationRegistry;
 
         ChatMemoryRepository repo = new InMemoryChatMemoryRepository();
         this.chatMemory = MessageWindowChatMemory.builder()
@@ -124,16 +115,40 @@ public class CarSalesAgent implements ChatService {
     /**
      * 处理用户消息。
      *
+     * <p>整轮对话包在一条 {@code chat-turn} 根观测里：路由、检索（embedding/chroma）、
+     * LLM 调用（含工具循环）全部挂在同一条 trace 下，并带上 Langfuse 的
+     * session/user/输入/输出属性。Web 路径会话 ID 即 userId。</p>
+     *
      * @param userId      用户标识（会话隔离）
      * @param userMessage 用户消息文本
      * @param userIp      客户端 IP（GeoLocator 定位用，FixedGeoLocator 当前忽略此参数）
      */
     @Override
     public String chat(String userId, String userMessage, String userIp) {
-        List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
+        Observation turn = startTurnObservation(userId, userId, userMessage);
+        try (Observation.Scope ignored = turn.openScope()) {
+            String response = chatInternal(userId, userMessage, userIp);
+            setTurnOutput(turn, response);
+            return response;
+        } catch (RuntimeException e) {
+            turn.error(e);
+            throw e;
+        } finally {
+            turn.stop();
+        }
+    }
+
+    private String chatInternal(String userId, String userMessage, String userIp) {
+        if (userMessage == null || userMessage.isBlank()) {
+            logConversation(userId, userMessage == null ? "" : userMessage, BLANK_MESSAGE_REPLY,
+                    0, false, false, List.of(), null);
+            return BLANK_MESSAGE_REPLY;
+        }
+
+        List<ResolvedEntity> matchedSeries = ObservationSupport.call(observationRegistry, "agent.entity-resolution", null, () -> resolveEntities(userMessage));
 
         int idleCount = idleCounters.getOrDefault(userId, 0);
-        boolean isIdle = isIdleChat(userMessage) && matchedSeries.isEmpty();
+        boolean isIdle = isIdle(userMessage, matchedSeries);
         boolean terminated = false;
         String response;
         QueryClassification classification = null;
@@ -157,34 +172,32 @@ public class CarSalesAgent implements ChatService {
                 askCountTracker.recordMention(e.seriesKey());
             }
 
-            // VagueQueryRouter 路由（#13 ticket）
             String historyText = buildHistoryText(userId);
-            MatchResult route = router.route(userMessage, historyText, userIp);
+            final List<ResolvedEntity> inputEntities = matchedSeries;
+            ConversationGuidance guidance = ObservationSupport.call(
+                    observationRegistry, "agent.conversation-understanding", null,
+                    () -> guidanceBuilder.build(userMessage, historyText, inputEntities));
+            matchedSeries = guidance.entities();
 
-            if (route != null && route.needsConfirm()) {
-                // BRAND 或 VAGUE+确认 → 直接返回追问文本，不调 LLM
-                response = route.followUpText();
-            } else {
-                // EXACT / null → 走两阶段检索（#4 ticket）
-                RetrievalContextAssembler.Result assembled =
-                        contextAssembler.retrieveContext(userMessage, matchedSeries);
-                classification = assembled.classification();
-                String ragContext = assembled.context();
-
-                // VAGUE + needsInference → 追问文本注入 system prompt
-                if (route != null && route.needsInference() && route.followUpText() != null) {
-                    ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
-                }
-
-                response = chatClient.prompt()
-                        .user(userMessage)
-                        .system(ragContext)
-                        .advisors(a -> a.param("chat_memory_conversation_id", userId))
-                        .call()
-                        .content();
+            // 模糊语义只提供内部指导和有效检索词，不再绕过主 Agent 直接回答。
+            RetrievalContextAssembler.Result assembled =
+                    contextAssembler.retrieveContext(guidance.retrievalQuery(), matchedSeries);
+            classification = assembled.classification();
+            String ragContext = assembled.context();
+            if (!guidance.prompt().isBlank()) {
+                ragContext = ragContext + "\n" + guidance.prompt();
             }
-        }
 
+            // 空上下文不挂 system（Spring AI 断言文本非空；全检索落空时 buildContext 返回 ""）
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
+                    .user(userMessage)
+                    .advisors(a -> a.param("chat_memory_conversation_id", userId));
+            if (ragContext != null && !ragContext.isBlank()) {
+                spec = spec.system(ragContext);
+            }
+            final ChatClient.ChatClientRequestSpec llmSpec = spec;
+            response = ObservationSupport.call(observationRegistry, "agent.llm", null, () -> llmSpec.call().content());
+        }
         logConversation(userId, userMessage, response, idleCount, isIdle, terminated,
                 matchedSeries, classification);
         return response;
@@ -195,7 +208,7 @@ public class CarSalesAgent implements ChatService {
      *
      * macan 每次请求都带上 Redis 全量历史，且 IAIService.chatReply(List&lt;Message&gt;) 接口
      * 无法透传 userId，因此本路径不依赖 AI 项目自身的跨请求记忆：用一次性会话 id，先把
-     * macan 历史灌入 ChatMemory（供 MemoryAdvisor 与 VagueQueryRouter 使用），用完即清空，
+     * macan 历史灌入 ChatMemory（供 MemoryAdvisor 与 Agent 内部对话理解使用），用完即清空，
      * 避免不同客户串话、也避免内存随请求数堆积。
      *
      * @param conversationId 一次性会话 id（每请求唯一）
@@ -205,32 +218,49 @@ public class CarSalesAgent implements ChatService {
     @Override
     public String chatWithHistory(String conversationId, String userMessage,
                                   List<org.springframework.ai.chat.messages.Message> history) {
-        try {
+        // macan 路径：会话维度落在 macan userId（conversationId 的 UUID 后缀仅用于并发隔离），
+        // 同一客户的多轮对话在 Langfuse 里归入同一 session
+        String sessionId = extractMacanSession(conversationId);
+        Observation turn = startTurnObservation(conversationId, sessionId, userMessage);
+        try (Observation.Scope ignored = turn.openScope()) {
             chatMemory.clear(conversationId);
             if (history != null && !history.isEmpty()) {
                 chatMemory.add(conversationId, history);
             }
-            return chat(conversationId, userMessage, "macan-server");
+            String response = chatInternal(conversationId, userMessage, "macan-server");
+            setTurnOutput(turn, response);
+            return response;
+        } catch (RuntimeException e) {
+            turn.error(e);
+            throw e;
         } finally {
             chatMemory.clear(conversationId);
+            turn.stop();
         }
     }
 
-    private boolean isIdleChat(String message) {
-        String lower = message.toLowerCase();
-        for (String kw : CAR_TOPIC_WORDS) {
-            if (lower.contains(kw.toLowerCase())) return false;
+    /** conversationId = &lt;macan userId&gt;-&lt;uuid&gt;；取 userId 段作会话 ID（无后缀则原样返回） */
+    private static String extractMacanSession(String conversationId) {
+        int cut = conversationId.length() - 37; // "-" + 36 位 UUID
+        if (cut > 0 && conversationId.charAt(cut) == '-') {
+            return conversationId.substring(0, cut);
         }
-        if (keywordBuilder.containsAnyKeyword(message)) return false;
-        if (entityResolver.hasMatch(message)) return false;
-        return true;
+        return conversationId;
+    }
+
+    /**
+     * 闲聊判定（#29 黑名单制）：只有命中明确闲聊黑名单才进闲聊分支；
+     * 提到车系实体的消息永不判闲聊。chat()/chatStream() 两个入口共用。
+     */
+    private boolean isIdle(String userMessage, List<ResolvedEntity> matchedSeries) {
+        return idleChatGate.isIdleChat(userMessage) && matchedSeries.isEmpty();
     }
 
     private List<ResolvedEntity> resolveEntities(String message) {
         return entityResolver.resolve(message);
     }
 
-    /** 提取最近 10 轮对话历史文本（供 VagueQueryRouter L3 使用）。 */
+    /** 提取最近 10 轮对话历史文本（供 Agent 内部对话理解使用）。 */
     private String buildHistoryText(String userId) {
         List<org.springframework.ai.chat.messages.Message> messages = chatMemory.get(userId);
         if (messages == null || messages.isEmpty()) return "";
@@ -252,7 +282,7 @@ public class CarSalesAgent implements ChatService {
                                   QueryClassification classification) {
         String matchedJson = matchedSeries.stream()
                 .map(ResolvedEntity::displayName)
-                .map(this::escapeJson)
+                .map(CarSalesAgent::escapeJson)
                 .collect(Collectors.joining("\",\"", "[\"", "\"]"));
         // 分类级别归因（《回复过长问题解决评估文档》加固建议 1）：
         // NONE=闲聊/未分级；BRAND/FAMILY/SERIES/UNRESTRICTED 见 QueryLevel
@@ -265,9 +295,16 @@ public class CarSalesAgent implements ChatService {
                 escapeJson(response != null ? response : ""), idleCount, isIdle, terminated,
                 matchedJson, level, escapeJson(levelBrand));
         log.info(json);
+
+        // 分类级别/闲聊状态同时写进当前对话轮次观测（Langfuse observation metadata，可筛选）
+        Observation current = observationRegistry.getCurrentObservation();
+        if (current != null) {
+            current.highCardinalityKeyValue("langfuse.observation.metadata.level", level);
+            current.highCardinalityKeyValue("langfuse.observation.metadata.idle", String.valueOf(isIdle));
+        }
     }
 
-    private String escapeJson(String s) {
+    private static String escapeJson(String s) {
         if (s == null) return "\"\"";
         return "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"")
                 .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t") + "\"";
@@ -275,57 +312,119 @@ public class CarSalesAgent implements ChatService {
 
     /**
      * 处理用户消息（流式输出，SSE）。
+     *
+     * <p>链路与同步入口一致：一条 {@code chat-turn} 根观测覆盖整轮。同步段
+     * （闲聊判定/路由/检索）在观测 scope 内执行；LLM 流式调用发生在订阅期，
+     * 用 {@code Flux.defer + openScope} 让订阅发生在 scope 内，保证 generation
+     * span 挂到本 trace 而不是漂成孤儿根（修复前流式一轮会碎成 3 条 trace）。</p>
      */
     @Override
     public Flux<String> chatStream(String userId, String userMessage, String userIp) {
-        List<ResolvedEntity> matchedSeries = resolveEntities(userMessage);
-
-        int idleCount = idleCounters.getOrDefault(userId, 0);
-        boolean isIdle = isIdleChat(userMessage) && matchedSeries.isEmpty();
-        boolean terminated = false;
-
-        if (isIdle) {
-            idleCount = idleCounters.merge(userId, 1, Integer::sum);
-            if (idleCount > IDLE_CHAT_LIMIT) {
-                terminated = true;
-                logConversation(userId, userMessage, IDLE_TERMINATION, idleCount, true, true,
-                        matchedSeries, null);
-                return Flux.just(IDLE_TERMINATION);
+        Observation turn = startTurnObservation(userId, userId, userMessage);
+        try (Observation.Scope ignored = turn.openScope()) {
+            if (userMessage == null || userMessage.isBlank()) {
+                logConversation(userId, userMessage == null ? "" : userMessage, "[stream-blank]",
+                        0, false, false, List.of(), null);
+                return Flux.just(BLANK_MESSAGE_REPLY)
+                        .doFinally(signal -> stopTurnWithOutput(turn, BLANK_MESSAGE_REPLY));
             }
-        } else {
-            idleCounters.remove(userId);
-            idleCount = 0;
-            for (ResolvedEntity e : matchedSeries) {
-                askCountTracker.recordMention(e.seriesKey());
+
+            List<ResolvedEntity> matchedSeries = ObservationSupport.call(observationRegistry, "agent.entity-resolution", null, () -> resolveEntities(userMessage));
+
+            int idleCount = idleCounters.getOrDefault(userId, 0);
+            boolean isIdle = isIdle(userMessage, matchedSeries);
+            boolean terminated = false;
+
+            if (isIdle) {
+                idleCount = idleCounters.merge(userId, 1, Integer::sum);
+                if (idleCount > IDLE_CHAT_LIMIT) {
+                    terminated = true;
+                    logConversation(userId, userMessage, IDLE_TERMINATION, idleCount, true, true,
+                            matchedSeries, null);
+                    return Flux.just(IDLE_TERMINATION)
+                            .doFinally(signal -> stopTurnWithOutput(turn, IDLE_TERMINATION));
+                }
+            } else {
+                idleCounters.remove(userId);
+                idleCount = 0;
+                for (ResolvedEntity e : matchedSeries) {
+                    askCountTracker.recordMention(e.seriesKey());
+                }
             }
-        }
 
-        // VagueQueryRouter 路由（#13 ticket）
-        String historyText = buildHistoryText(userId);
-        MatchResult route = router.route(userMessage, historyText, userIp);
-
-        if (route != null && route.needsConfirm()) {
+            String historyText = buildHistoryText(userId);
+            final List<ResolvedEntity> inputEntities = matchedSeries;
+            ConversationGuidance guidance = ObservationSupport.call(
+                    observationRegistry, "agent.conversation-understanding", null,
+                    () -> guidanceBuilder.build(userMessage, historyText, inputEntities));
+            matchedSeries = guidance.entities();
+            // 两阶段检索（#4 ticket）——日志在检索后记录，携带分类级别归因
+            RetrievalContextAssembler.Result assembled =
+                    contextAssembler.retrieveContext(guidance.retrievalQuery(), matchedSeries);
             logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated,
-                    matchedSeries, null);
-            return Flux.just(route.followUpText());
-        }
+                    matchedSeries, assembled.classification());
+            String ragContext = assembled.context();
+            if (!guidance.prompt().isBlank()) {
+                ragContext = ragContext + "\n" + guidance.prompt();
+            }
 
-        // 两阶段检索（#4 ticket）——日志在检索后记录，携带分类级别归因
-        RetrievalContextAssembler.Result assembled =
-                contextAssembler.retrieveContext(userMessage, matchedSeries);
-        logConversation(userId, userMessage, "[stream]", idleCount, isIdle, terminated,
-                matchedSeries, assembled.classification());
-        String ragContext = assembled.context();
-        if (route != null && route.needsInference() && route.followUpText() != null) {
-            ragContext = ragContext + "\n## 引导提示\n" + route.followUpText();
-        }
+            // 空上下文不挂 system（与 chat() 同步入口同守卫）；spec 须 effectively final 供订阅期 lambda 使用
+            ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
+                    .user(userMessage)
+                    .advisors(a -> a.param("chat_memory_conversation_id", userId));
+            final ChatClient.ChatClientRequestSpec streamSpec =
+                    (ragContext != null && !ragContext.isBlank()) ? spec.system(ragContext) : spec;
 
-        return chatClient.prompt()
-                .user(userMessage)
-                .system(ragContext)
-                .advisors(a -> a.param("chat_memory_conversation_id", userId))
-                .stream()
-                .content();
+            // 订阅发生在 turn scope 内 → ChatClient 链（记忆 advisor / LLM 流式 generation）
+            // 创建观测时能拿到父上下文。注意必须用 Flux.using 而非 defer：defer 的 supplier
+            // 返回内部 Flux 后 scope 即关闭，真正的订阅（及 generation 观测创建）发生在
+            // scope 之外 → 孤儿 span；using 的资源（scope）在整个订阅链生命周期内保持打开。
+            StringBuilder collected = new StringBuilder();
+            return Flux.using(turn::openScope,
+                            scope -> ObservationSupport.call(observationRegistry, "agent.llm", null, () -> streamSpec.stream().content()),
+                            Observation.Scope::close)
+                    .doOnNext(collected::append)
+                    .doOnError(turn::error)
+                    .doFinally(signal -> stopTurnWithOutput(turn, collected.toString()));
+        } catch (RuntimeException e) {
+            turn.error(e);
+            turn.stop();
+            throw e;
+        }
+    }
+
+    // ---- 对话轮次观测辅助 ----
+
+    /**
+     * 创建并启动一条对话轮次根观测。
+     *
+     * <p>属性按 Langfuse v4 OTLP 映射（已对本机自托管实例实证）：
+     * {@code langfuse.session.id}/{@code langfuse.user.id} 成为 trace 的
+     * sessionId/userId（会话/用户维度聚合）；{@code langfuse.observation.input/output}
+     * 挂在根 span 即整轮对话的输入/输出。</p>
+     */
+    private Observation startTurnObservation(String userId, String sessionId, String userMessage) {
+        Observation observation = Observation.createNotStarted(TURN_OBSERVATION, observationRegistry)
+                .highCardinalityKeyValue(ATTR_SESSION_ID, sessionId == null ? "" : sessionId)
+                .highCardinalityKeyValue(ATTR_USER_ID, userId == null ? "" : userId);
+        observation.highCardinalityKeyValue(ATTR_INPUT,
+                "{\"message\":" + escapeJson(userMessage == null ? "" : userMessage) + "}");
+        observation.start();
+        return observation;
+    }
+
+    /** 写整轮输出并停止根观测（doFinally 回调专用，不抛出） */
+    private static void stopTurnWithOutput(Observation turn, String response) {
+        try {
+            setTurnOutput(turn, response);
+        } finally {
+            turn.stop();
+        }
+    }
+
+    private static void setTurnOutput(Observation turn, String response) {
+        turn.highCardinalityKeyValue(ATTR_OUTPUT,
+                "{\"reply\":" + escapeJson(response == null ? "" : response) + "}");
     }
 
     public void resetIdleCounter(String userId) {

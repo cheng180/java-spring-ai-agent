@@ -18,7 +18,8 @@ import java.util.List;
  *
  * @see org.example.ai.impl.CarSalesAgent
  */
-public interface ChatService {
+public interface
+ChatService {
 
     /**
      * 对话回复（Web 前端 / 通用调用）。

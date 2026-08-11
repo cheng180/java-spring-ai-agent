@@ -54,6 +54,10 @@ class EntityResolverTest {
         jdbc.update("INSERT INTO entity_mapping (entity_id, display_name, aliases_json) VALUES (?, ?, ?)",
                 "entity:car:li-auto:ideal-l6", "理想-理想L6",
                 "[\"理想l6\",\"l6\"]");
+        // #30：裸车型词别名（由 rebuildEntityMapping 拆词生成的形态）
+        jdbc.update("INSERT INTO entity_mapping (entity_id, display_name, aliases_json) VALUES (?, ?, ?)",
+                "entity:car:宝马:宝马x3-m", "宝马-宝马X3 M",
+                "[\"宝马X3 M\",\"X3\"]");
 
         resolver = new EntityResolver(jdbc);
     }
@@ -170,9 +174,17 @@ class EntityResolverTest {
     }
 
     @Test
+    @DisplayName("resolve：裸车型词命中（#30）——\"我想买x3\" → 宝马-宝马X3 M")
+    void resolvesBareModelToken() {
+        List<ResolvedEntity> hits = resolver.resolve("我想买x3");
+        assertThat(hits).extracting(ResolvedEntity::displayName)
+                .contains("宝马-宝马X3 M");
+    }
+
+    @Test
     @DisplayName("aliasCount 返回别名索引总条目数")
     void aliasCountReturnsTotal() {
-        // 4 displayName + 3+2+2+2 = 9 JSON 别名 = 13
-        assertThat(resolver.aliasCount()).isEqualTo(13);
+        // 5 displayName + 3+2+2+2+2 = 11 JSON 别名 = 16
+        assertThat(resolver.aliasCount()).isEqualTo(16);
     }
 }

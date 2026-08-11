@@ -1,8 +1,10 @@
 package org.example.ai.knowledge;
 
+import org.example.ai.config.observability.SyncObservationSupport;
 import org.example.ai.knowledge.facts.AtomicFact;
 import org.example.ai.knowledge.facts.LlmFactExtractor;
 import org.example.ai.knowledge.facts.SkuFactExtractor;
+import io.micrometer.observation.ObservationRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -47,15 +49,18 @@ public class KnowledgeBaseInitializer implements CommandLineRunner {
     private final ResourcePatternResolver resourceResolver;
     private final LlmFactExtractor llmExtractor;
     private final JdbcTemplate jdbc;
+    private final ObservationRegistry observationRegistry;
 
     public KnowledgeBaseInitializer(VectorStore vectorStore,
                                     ResourcePatternResolver resourceResolver,
                                     LlmFactExtractor llmExtractor,
-                                    JdbcTemplate jdbc) {
+                                    JdbcTemplate jdbc,
+                                    ObservationRegistry observationRegistry) {
         this.vectorStore = vectorStore;
         this.resourceResolver = resourceResolver;
         this.llmExtractor = llmExtractor;
         this.jdbc = jdbc;
+        this.observationRegistry = observationRegistry;
     }
 
     @Override
@@ -70,6 +75,16 @@ public class KnowledgeBaseInitializer implements CommandLineRunner {
      * @return 同步结果摘要，如 "full-rebuild" 或 "synced=2,skipped=0,deleted=1"
      */
     public String refreshDocs() throws IOException {
+        try {
+            return SyncObservationSupport.call(observationRegistry, "corpus-docs", this::doRefreshDocs);
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private String doRefreshDocs() throws IOException {
         log.info("=== 开始增量同步知识库 ===");
 
         // Collection 为空 → 首次全量重建

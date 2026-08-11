@@ -1,6 +1,8 @@
 package org.example.ai.impl.context;
 
 import org.example.ai.impl.routing.QueryClassification;
+import org.example.ai.config.observability.ObservationSupport;
+import io.micrometer.observation.ObservationRegistry;
 import org.example.ai.impl.routing.QueryLevel;
 import org.example.ai.impl.routing.QueryLevelClassifier;
 import org.example.ai.impl.search.HybridRetriever;
@@ -12,6 +14,7 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +43,8 @@ public class RetrievalContextAssembler {
     private static final int RAG_TOPK = 5;
     private static final double RAG_THRESHOLD = 0.5;
     private static final double SERIES_CONFIDENCE = 0.6;
+    /** 多车系细节查询的整轮子块预算，避免按车系 topK 叠加放大上下文。 */
+    private static final int CHILD_DOCS_TOTAL_LIMIT = 30;
 
     /** BRAND 级级别指令：只报车系名、只推一款、反问收尾、禁止列清单、本轮禁调库存工具 */
     static final String BRAND_INSTRUCTION =
@@ -47,30 +52,51 @@ public class RetrievalContextAssembler {
             + "然后用一个问题反问用户偏好（如心仪的款式、预算或用途）收尾；"
             + "禁止列出车系/车型清单，禁止展开具体车源；本轮不要调用 searchInventory/getAllCars 工具。";
 
+    /**
+     * 披露约束子句（#32 ticket）——披露边界在回复层，不在上下文层。
+     *
+     * <p>上下文保持全量注入（价格等信息是客服的知识，必须在场）；
+     * 本轮是否把价格数字告诉客户，由本约束裁决：未问价不报价。</p>
+     */
+    static final String PRICE_DISCLOSURE_CLAUSE =
+            "注意：上面资料里即使有价格、库存等具体数字，用户没明确问价就不要报——"
+            + "本轮只做介绍，不报价。";
+
     /** FAMILY 级级别指令：只讲命中的车系，问用户想深入哪个 */
     static final String FAMILY_INSTRUCTION =
             "用户提到了同品牌的多个车系。只介绍上面命中的这几个车系（不要涉及其他车系），"
-            + "不要展开具体款型清单；末尾询问用户想深入了解哪个车系。";
+            + "不要展开具体款型清单；末尾询问用户想深入了解哪个车系。"
+            + PRICE_DISCLOSURE_CLAUSE;
 
     /** SERIES 级级别指令：只讲命中的车系，末尾问是否深入了解 */
     static final String SERIES_INSTRUCTION =
             "用户聚焦单个车系。只介绍这个车系（不要提其他车系），可基于上面的车系信息回答；"
-            + "末尾询问用户是否想深入了解该车系（如优点、亮点等）。";
+            + "末尾询问用户是否想深入了解该车系（如优点、亮点等）。"
+            + PRICE_DISCLOSURE_CLAUSE;
 
     private final HybridRetriever hybridRetriever;
     private final VectorStore vectorStore;
     private final QueryLevelClassifier classifier;
     private final AskCountTracker askCountTracker;
     private final JdbcTemplate jdbc;
+    private final ObservationRegistry observationRegistry;
 
     public RetrievalContextAssembler(HybridRetriever hybridRetriever, VectorStore vectorStore,
                                      QueryLevelClassifier classifier,
                                      AskCountTracker askCountTracker, JdbcTemplate jdbc) {
+        this(hybridRetriever, vectorStore, classifier, askCountTracker, jdbc, ObservationRegistry.NOOP);
+    }
+
+    @Autowired
+    public RetrievalContextAssembler(HybridRetriever hybridRetriever, VectorStore vectorStore,
+                                     QueryLevelClassifier classifier,
+                                     AskCountTracker askCountTracker, JdbcTemplate jdbc, ObservationRegistry observationRegistry) {
         this.hybridRetriever = hybridRetriever;
         this.vectorStore = vectorStore;
         this.classifier = classifier;
         this.askCountTracker = askCountTracker;
         this.jdbc = jdbc;
+        this.observationRegistry = observationRegistry;
     }
 
     /**
@@ -81,6 +107,10 @@ public class RetrievalContextAssembler {
     public record Result(String context, QueryClassification classification) {}
 
     public Result retrieveContext(String userMessage, List<ResolvedEntity> matchedSeries) {
+        return ObservationSupport.call(observationRegistry, "agent.retrieval", null, () -> retrieveContextInternal(userMessage, matchedSeries));
+    }
+
+    private Result retrieveContextInternal(String userMessage, List<ResolvedEntity> matchedSeries) {
         // ---- 粒度分类（#24） ----
         QueryClassification classification = classifier.classify(userMessage, matchedSeries);
 
@@ -238,6 +268,7 @@ public class RetrievalContextAssembler {
         List<Document> childDocs = new ArrayList<>();
         Set<Object> seenSkuIds = new HashSet<>();
         FilterExpressionBuilder cb = new FilterExpressionBuilder();
+        childLoop:
         for (String sid : hitSeries) {
             Filter.Expression cf = cb.and(
                     cb.eq("type", "车源"),
@@ -245,6 +276,7 @@ public class RetrievalContextAssembler {
             ).build();
             for (Document c : vectorStore.similaritySearch(
                     SearchRequest.builder().query(sid).topK(20).filterExpression(cf).build())) {
+                if (childDocs.size() >= CHILD_DOCS_TOTAL_LIMIT) break childLoop;
                 Object skuId = c.getMetadata().get("sku_id");
                 if (skuId != null && seenSkuIds.add(skuId)) childDocs.add(c);
             }
@@ -254,7 +286,7 @@ public class RetrievalContextAssembler {
         return buildContext(parentDocs, childDocs, Collections.emptyList());
     }
 
-    /** 回退路径：子块泛检索 + 百科/话术补充（无车系锚点） */
+    /** 回退路径：子块泛检索 + 百科/话术补充（无车系锚点）。 */
     private String fallbackContext(String userMessage) {
         FilterExpressionBuilder b = new FilterExpressionBuilder();
         Filter.Expression childOnly = b.and(
