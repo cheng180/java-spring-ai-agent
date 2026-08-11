@@ -112,7 +112,8 @@ class KnowledgeDynamicUpdateTest {
 
         var refresher = new InMemoryIndexRefresher(
                 new DatabaseInitializer(jdbc), entityResolver, keywordBuilder, bm25Indexer);
-        updater = new SkuVectorUpdater(vectorStore, skuExtractor, parentBuilder, jdbc, refresher);
+        updater = new SkuVectorUpdater(vectorStore, skuExtractor, parentBuilder, jdbc, refresher,
+                io.micrometer.observation.ObservationRegistry.NOOP);
     }
 
     @AfterEach

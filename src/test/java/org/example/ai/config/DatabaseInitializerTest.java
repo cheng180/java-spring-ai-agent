@@ -4,9 +4,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.sqlite.SQLiteDataSource;
 
+import java.io.File;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -112,6 +116,50 @@ class DatabaseInitializerTest {
             actual += weeklyCounts[i] * weights[i];
         }
         assertThat(actual).isEqualTo(10 * 1.0 + 5 * 0.8 + 8 * 0.6); // 18.8
+    }
+
+    // ---- #30：裸车型词拆词注册别名 ----
+
+    @Test
+    @DisplayName("rebuildEntityMapping：车系名拆词注册裸车型别名（宝马X3 M → X3）")
+    void rebuildEntityMappingRegistersBareModelTokens() throws Exception {
+        // :memory: 单连接库不便复用，切临时文件 DB 走 JdbcTemplate
+        File tmpDb = new File(System.getProperty("java.io.tmpdir"),
+                "test-init-" + UUID.randomUUID() + ".db");
+        try {
+            var ds = new SQLiteDataSource();
+            ds.setUrl("jdbc:sqlite:" + tmpDb.getAbsolutePath());
+            var jdbc = new JdbcTemplate(ds);
+            jdbc.execute("CREATE TABLE car_sku (id INTEGER PRIMARY KEY, brand_name TEXT, series_name TEXT,"
+                    + " sale_status INTEGER DEFAULT 1, is_deleted INTEGER DEFAULT 0)");
+            jdbc.execute("CREATE TABLE entity_mapping (entity_id TEXT NOT NULL, display_name TEXT NOT NULL,"
+                    + " aliases_json TEXT DEFAULT '[]', PRIMARY KEY (entity_id, display_name))");
+            jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (1, '宝马', '宝马X3 M')");
+            jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (2, '比亚迪', '宋PLUS DM-i')");
+            jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (3, '测试', '测试GS 2026')");
+
+            new DatabaseInitializer(jdbc).rebuildEntityMapping();
+
+            String x3m = jdbc.queryForObject(
+                    "SELECT aliases_json FROM entity_mapping WHERE display_name = '宝马-宝马X3 M'",
+                    String.class);
+            assertThat(x3m).contains("\"X3\"");        // 去品牌前缀拆词后裸车型词成为独立别名
+            assertThat(x3m).doesNotContain("\"M\"");   // 单字母 token 不注册
+
+            String song = jdbc.queryForObject(
+                    "SELECT aliases_json FROM entity_mapping WHERE display_name = '比亚迪-宋PLUS DM-i'",
+                    String.class);
+            assertThat(song).contains("\"宋PLUS\"").contains("\"DM\"");
+            assertThat(song).doesNotContain("\"i\"");  // 单字母 token 不注册
+
+            String gs = jdbc.queryForObject(
+                    "SELECT aliases_json FROM entity_mapping WHERE display_name = '测试-测试GS 2026'",
+                    String.class);
+            assertThat(gs).contains("\"GS\"");
+            assertThat(gs).doesNotContain("\"2026\""); // 纯数字 token 不注册
+        } finally {
+            tmpDb.delete();
+        }
     }
 
     private static String toSlug(String s) {

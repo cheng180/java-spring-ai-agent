@@ -1,5 +1,7 @@
 package org.example.ai.impl.search;
 
+import org.example.ai.config.observability.ObservationSupport;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
@@ -47,11 +49,14 @@ public class HybridRetriever {
 
     private final Bm25Indexer bm25Indexer;
     private final VectorStore vectorStore;
+    private final io.micrometer.observation.ObservationRegistry observationRegistry;
     private final ExecutorService executor = Executors.newFixedThreadPool(2);
 
-    public HybridRetriever(Bm25Indexer bm25Indexer, VectorStore vectorStore) {
+    public HybridRetriever(Bm25Indexer bm25Indexer, VectorStore vectorStore,
+                           io.micrometer.observation.ObservationRegistry observationRegistry) {
         this.bm25Indexer = bm25Indexer;
         this.vectorStore = vectorStore;
+        this.observationRegistry = observationRegistry;
     }
 
     @PreDestroy
@@ -89,11 +94,17 @@ public class HybridRetriever {
         int candidateK = topK * CANDIDATE_MULTIPLIER;
 
         // ---- 并行执行 BM25 + BGE-M3 ----
+        // 工作线程没有请求线程的观测上下文：先捕获当前观测（对话轮次/知识同步），
+        // 在 supplyAsync 内重开 scope，否则 BGE 路的 chroma query / embedding span
+        // 会漂成孤儿 trace（Langfuse 链路治理）
+        io.micrometer.observation.Observation currentObservation =
+                observationRegistry.getCurrentObservation();
         CompletableFuture<List<RankedDoc>> bm25Future = CompletableFuture.supplyAsync(
-                () -> runBm25(query, candidateK), executor);
+                withObservation(currentObservation, () -> ObservationSupport.call(observationRegistry, "retrieval.bm25", null, () -> runBm25(query, candidateK))), executor);
 
         CompletableFuture<List<RankedDoc>> bgeFuture = CompletableFuture.supplyAsync(
-                () -> runBge(query, candidateK, similarityThreshold, filterExpression), executor);
+                withObservation(currentObservation,
+                        () -> ObservationSupport.call(observationRegistry, "retrieval.vector", null, () -> runBge(query, candidateK, similarityThreshold, filterExpression))), executor);
 
         List<RankedDoc> bm25Results;
         List<RankedDoc> bgeResults;
@@ -124,6 +135,19 @@ public class HybridRetriever {
     }
 
     // ---- 内部检索方法 ----
+
+    /** 让工作线程上的 span 挂回调用方的观测链：在 supplier 内重开父观测 scope */
+    private static <T> java.util.function.Supplier<T> withObservation(
+            io.micrometer.observation.Observation observation, java.util.function.Supplier<T> work) {
+        if (observation == null) {
+            return work;
+        }
+        return () -> {
+            try (io.micrometer.observation.Observation.Scope ignored = observation.openScope()) {
+                return work.get();
+            }
+        };
+    }
 
     private List<RankedDoc> runBm25(String query, int topK) {
         Bm25Index index = bm25Indexer.getIndex();

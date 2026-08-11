@@ -192,6 +192,25 @@ class RetrievalContextAssemblerTest {
         assertThat(ctx).contains("回退子块"); // 走了回退路径而非空上下文
     }
 
+    @Test
+    @DisplayName("#32 SERIES 级：上下文全量保留价格 + 级别指令带披露约束（未问价不报价）")
+    void seriesLevelKeepsFullContextWithDisclosureInstruction() {
+        ResolvedEntity re = new ResolvedEntity(
+                "entity:car:宝马:宝马x3-m", "宝马-宝马X3 M", "宝马", "宝马X3 M");
+        Document parent = doc("【宝马 宝马X3 M】车系信息\n价格区间：101.11万 ~ 101.11万\n"
+                + "在售款型：\n  - 雷霆版 | 全款101.11万\n",
+                Map.of("series_id", "宝马-宝马X3 M"));
+        when(vectorStore.similaritySearch(any(SearchRequest.class))).thenReturn(List.of(parent));
+
+        String ctx = assembler.retrieveContext("我想买宝马X3 M", List.of(re)).context();
+
+        // 上下文全量：价格仍在上下文中（客服的知识必须在场，不做物理剥离）
+        assertThat(ctx).contains("价格区间：101.11万 ~ 101.11万");
+        assertThat(ctx).contains("全款101.11万");
+        // 级别指令携带披露约束：披露边界在回复层
+        assertThat(ctx).contains("用户没明确问价就不要报");
+    }
+
     // ---- #25：BRAND 级分层（品牌问句） ----
 
     @Test
@@ -272,6 +291,7 @@ class RetrievalContextAssemblerTest {
         assertThat(ctx).doesNotContain("秦PLUS 荣耀版");
         assertThat(ctx).doesNotContain("在售款型：");
         assertThat(ctx).contains("级别指令");
+        assertThat(ctx).contains("用户没明确问价就不要报");         // #32 FAMILY 级披露约束
         verify(vectorStore, times(2)).similaritySearch(any(SearchRequest.class));
     }
 

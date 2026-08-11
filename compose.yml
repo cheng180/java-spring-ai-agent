@@ -1,3 +1,17 @@
+# ============================================
+# 本地开发用 —— 仅 ChromaDB 向量库
+#
+# 用法：docker compose up -d（start.sh 会自动执行并等待就绪）
+#
+# 注意事项：
+# - 宿主 8000 端口被 Windows 系统进程（vmnat/wslrelay）占用，必须映射 8001，
+#   application.properties 也指向 127.0.0.1:8001，勿改。
+# - 数据卷 chroma-data 是 external：真实知识库（car-sales-kb，213 条 embeddings）
+#   在该卷里。external 声明使卷名不带项目名前缀，无论 compose 项目名是什么
+#   （ai / macan-ai-chat…）都挂同一个卷，避免数据分裂。
+# - restart: unless-stopped 保证 Docker Desktop 重启后 chroma 自动拉起。
+# - 镜像固定 dev224（与历史数据写入版本一致），勿用 latest（会漂移且可能与数据不兼容）。
+# ============================================
 services:
   chroma:
     image: chromadb/chroma:1.5.10.dev224
@@ -5,11 +19,15 @@ services:
     ports:
       - "8001:8000"
     volumes:
-      - chroma-data:/chroma/chroma
+      # 1.5 版 Rust 镜像持久化目录是 /data（chroma run --path 的默认值），
+      # 旧环境变量 IS_PERSISTENT/PERSIST_DIRECTORY 已失效，勿再使用。
+      - chroma-data:/data
     environment:
-      - IS_PERSISTENT=TRUE
-      - PERSIST_DIRECTORY=/chroma/chroma
       - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+    # 注：不做容器内 healthcheck——该精简镜像没有 curl/python 可用；
+    # 就绪探测由 start.sh 从宿主侧 curl 127.0.0.1:8001 完成。
 
 volumes:
   chroma-data:
+    external: true

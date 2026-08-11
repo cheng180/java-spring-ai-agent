@@ -426,7 +426,25 @@ public class DatabaseInitializer implements CommandLineRunner {
             aliases.add(shortBrand + "-" + series);
         }
 
+        // #30：裸车型词拆词别名——车系名去品牌前缀后按空格/连字符切 token，
+        // 长度 ≥2 且含字母的 token 注册为独立别名（"宝马X3 M" → "X3"）。
+        // 让"我想买x3"这类口语代号命中实体；撞词由多实体分级逻辑（FAMILY/BRAND）消化。
+        String strippedSeries = series.trim();
+        if (strippedSeries.startsWith(brand)) {
+            strippedSeries = strippedSeries.substring(brand.length()).trim();
+        }
+        for (String token : strippedSeries.split("[\\s\\-]+")) {
+            if (token.length() >= 2 && containsLetter(token) && !aliases.contains(token)) {
+                aliases.add(token);
+            }
+        }
+
         return aliases.isEmpty() ? "[]" : "[\"" + String.join("\",\"", aliases) + "\"]";
+    }
+
+    /** token 是否含字母（Unicode 字母，含中文）——挡掉纯数字/符号 token */
+    private static boolean containsLetter(String s) {
+        return s.chars().anyMatch(Character::isLetter);
     }
 
     /** 极简 CSV 解析（处理引号包裹和 "" 转义） */

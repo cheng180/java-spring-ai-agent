@@ -25,6 +25,10 @@ import java.util.Map;
 public class CarSalesTools {
 
     private static final Logger log = LoggerFactory.getLogger(CarSalesTools.class);
+
+    /** 防止模型误调用时把全量 SKU 回流上下文。 */
+    private static final int SEARCH_MATCHED_LIMIT = 30;
+    private static final int ALL_CARS_LIMIT = 30;
     private final JdbcTemplate jdbc;
     private final StoreLocator storeLocator;
     private final PositionStackGeoLocator geocoder;
@@ -73,7 +77,8 @@ public class CarSalesTools {
                 String p = "%" + matched.get(i) + "%";
                 params.add(p); params.add(p); params.add(p);
             }
-            rows = jdbc.queryForList(baseSql + "(" + cond + ")", params.toArray());
+            rows = jdbc.queryForList(
+                    baseSql + "(" + cond + ") LIMIT " + SEARCH_MATCHED_LIMIT, params.toArray());
         }
 
         if (rows.isEmpty()) {
@@ -184,12 +189,13 @@ public class CarSalesTools {
     public String getAllCars() {
         log.info("Tool调用: getAllCars()");
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT * FROM car_sku WHERE sale_status = 1 AND is_deleted = 0 ORDER BY brand_name, series_name");
+                "SELECT * FROM car_sku WHERE sale_status = 1 AND is_deleted = 0 "
+                        + "ORDER BY brand_name, series_name LIMIT " + ALL_CARS_LIMIT);
 
         if (rows.isEmpty()) return "当前没有在售车源。";
 
         StringBuilder sb = new StringBuilder();
-        sb.append("当前在售车源（共 ").append(rows.size()).append(" 条）：\n");
+        sb.append("当前在售车源摘要（最多返回 ").append(ALL_CARS_LIMIT).append(" 条）：\n");
         for (int i = 0; i < rows.size(); i++) {
             Map<String, Object> r = rows.get(i);
             sb.append(String.format("%d. %s | %s | 全款%s | %s\n",
