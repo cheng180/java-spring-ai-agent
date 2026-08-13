@@ -345,8 +345,13 @@
 (function() {
     'use strict';
 
-    // 页面加载时生成持久 userId，整段对话复用同一个 ID
-    var sessionUserId = 'web-user-' + Date.now();
+    // 持久 userId：localStorage 保存，同浏览器跨刷新/重开页面复用同一个 ID，
+    // 保证后端 ChatMemory（40 轮窗口）能跨会话续上记忆，不"说两句就忘"。
+    var sessionUserId = localStorage.getItem('webUserId');
+    if (!sessionUserId) {
+        sessionUserId = 'web-user-' + Date.now();
+        localStorage.setItem('webUserId', sessionUserId);
+    }
 
     var userInput = document.getElementById('userInput');
     var sendBtn = document.getElementById('sendBtn');

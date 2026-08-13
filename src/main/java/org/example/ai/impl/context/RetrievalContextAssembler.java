@@ -40,9 +40,16 @@ import java.util.stream.Collectors;
 @Component
 public class RetrievalContextAssembler {
 
-    private static final int RAG_TOPK = 5;
+    /** 回退路径（无车系锚点）子块泛检索 topK：宁少勿滥，上下文过大会诱导模型超量推荐。 */
+    private static final int RAG_TOPK = 3;
+    /** 回退路径百科/话术补充条数。 */
+    private static final int KNOWLEDGE_TOPK = 2;
     private static final double RAG_THRESHOLD = 0.5;
     private static final double SERIES_CONFIDENCE = 0.6;
+    /** 多车系泛查询（如"20万左右有什么车"）每车系子块召回数：钩子层只给少量候选。 */
+    private static final int MULTI_SERIES_CHILD_TOPK = 3;
+    /** 多车系泛查询子块总预算。 */
+    private static final int MULTI_SERIES_CHILD_LIMIT = 9;
     /** 多车系细节查询的整轮子块预算，避免按车系 topK 叠加放大上下文。 */
     private static final int CHILD_DOCS_TOTAL_LIMIT = 30;
 
@@ -127,6 +134,14 @@ public class RetrievalContextAssembler {
         } else {
             // ---- UNRESTRICTED：现状行为 ----
             ctx = assembleUnrestrictedContext(userMessage, matchedSeries);
+        }
+
+        // 价格门控（渐进式披露第一层）：客户没问价/没给预算/没做对比时，
+        // 从注入上下文物理剥离价格数字，模型无价可抄——避免"一股脑全盘托出"。
+        // 客户问价/给预算/对比时保留（第三层才披露价格）。实测 prompt 约束挡不住照抄，
+        // 取代 #32 的"上下文全量保留 + 回复层约束"方案。
+        if (!isPriceInquiry(userMessage)) {
+            ctx = stripPrices(ctx);
         }
         return new Result(ctx, classification);
     }
@@ -264,7 +279,13 @@ public class RetrievalContextAssembler {
             }
         }
 
-        // ---- 阶段二：命中车系子块全量展开（决策：全量，不截断） ----
+        // ---- 阶段二：命中车系子块展开（动态 topK：渐进式披露） ----
+        // 单车系（客户在细问某款）→ 子块全量给足（细节层，细聊需要）；
+        // 多车系（泛预算/泛推荐，如"20万左右有什么车"）→ 每车系只给少量候选（钩子层），
+        //   避免 30 条 SKU 涌进上下文诱导模型列长清单（回复过长根因）。
+        boolean singleSeries = hitSeries.size() == 1;
+        int childTopK = singleSeries ? 20 : MULTI_SERIES_CHILD_TOPK;
+        int childTotalLimit = singleSeries ? CHILD_DOCS_TOTAL_LIMIT : MULTI_SERIES_CHILD_LIMIT;
         List<Document> childDocs = new ArrayList<>();
         Set<Object> seenSkuIds = new HashSet<>();
         FilterExpressionBuilder cb = new FilterExpressionBuilder();
@@ -275,8 +296,8 @@ public class RetrievalContextAssembler {
                     cb.and(cb.eq("level", "child"), cb.eq("parent_series_id", sid))
             ).build();
             for (Document c : vectorStore.similaritySearch(
-                    SearchRequest.builder().query(sid).topK(20).filterExpression(cf).build())) {
-                if (childDocs.size() >= CHILD_DOCS_TOTAL_LIMIT) break childLoop;
+                    SearchRequest.builder().query(sid).topK(childTopK).filterExpression(cf).build())) {
+                if (childDocs.size() >= childTotalLimit) break childLoop;
                 Object skuId = c.getMetadata().get("sku_id");
                 if (skuId != null && seenSkuIds.add(skuId)) childDocs.add(c);
             }
@@ -296,7 +317,7 @@ public class RetrievalContextAssembler {
 
         Filter.Expression nonCar = new FilterExpressionBuilder().ne("type", "车源").build();
         List<Document> knowledgeDocs = hybridRetriever.search(
-                userMessage, 3, RAG_THRESHOLD, nonCar);
+                userMessage, KNOWLEDGE_TOPK, RAG_THRESHOLD, nonCar);
 
         return buildContext(Collections.emptyList(), childDocs, knowledgeDocs);
     }
@@ -327,5 +348,32 @@ public class RetrievalContextAssembler {
     private static String metaStr(Document d, String key) {
         Object v = d.getMetadata().get(key);
         return v != null ? v.toString() : null;
+    }
+
+    // ---- 价格门控（渐进式披露第一层） ----
+
+    /** 匹配注入文本中的价格片段：子块新格式"价格16.98万"、旧格式"全款销售价/金融方案价"、父块"价格区间"与"| 全款xx万"。 */
+    private static final java.util.regex.Pattern PRICE_STRIP = java.util.regex.Pattern.compile(
+            "，价格[^，。\\n]*"
+            + "|，全款销售价[^，。\\n]*"
+            + "|，金融方案价[^，。\\n]*"
+            + "|价格区间：[^\\n]*"
+            + "|\\|\\s*全款[^|\\n]*");
+
+    /** 客户消息是否已进入"需要价格"的层级：问价、给预算、价格顾虑、对比。 */
+    static boolean isPriceInquiry(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) return false;
+        String m = userMessage;
+        return m.contains("多少钱") || m.contains("怎么卖") || m.contains("价格")
+                || m.contains("报价") || m.contains("优惠") || m.contains("便宜")
+                || m.contains("预算") || m.contains("砍价") || m.contains("贵")
+                || m.contains("对比") || m.contains("哪个好") || m.contains("区别")
+                || java.util.regex.Pattern.matches(".*\\d+\\s*万.*", m);
+    }
+
+    /** 从上下文文本中剥离价格片段（未问价时调用）。 */
+    static String stripPrices(String ctx) {
+        if (ctx == null || ctx.isEmpty()) return ctx;
+        return PRICE_STRIP.matcher(ctx).replaceAll("").replaceAll("\\n{3,}", "\n\n");
     }
 }

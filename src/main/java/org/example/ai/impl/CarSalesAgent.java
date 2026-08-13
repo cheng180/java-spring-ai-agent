@@ -48,7 +48,8 @@ public class CarSalesAgent implements ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(CarSalesAgent.class);
 
-    private static final int MEMORY_MAX_MESSAGES = 40;
+    /** 对话记忆窗口（MessageWindowChatMemory）：40 轮对话内的消息都进上下文，扩大防"说两句就忘"。 */
+    private static final int MEMORY_MAX_MESSAGES = 80;
     private static final int IDLE_CHAT_LIMIT = 3;
     private static final String IDLE_TERMINATION = "买车的事随时找我，先不打扰您了～有需要再聊！";
 
@@ -197,6 +198,26 @@ public class CarSalesAgent implements ChatService {
             }
             final ChatClient.ChatClientRequestSpec llmSpec = spec;
             response = ObservationSupport.call(observationRegistry, "agent.llm", null, () -> llmSpec.call().content());
+            // 价格兜底（第三道防线）：客户未问价但模型仍报了价格（可能是模型训练知识）
+            // → 用修正指令让模型重写为"一句话概括 + 引导"。
+            if (!isPriceInquiry(userMessage) && containsPrice(response)) {
+                response = ObservationSupport.call(observationRegistry, "agent.llm-rewrite", null,
+                        () -> rewriteWithoutPrice(chatClient, userId, userMessage));
+            }
+            // 销售线索兜底：客户已进入购车意向阶段（约试驾/到店/选定/问价）但回复没要联系方式
+            // → 在末尾自然追加留联系方式引导（prompt 软约束压不住，代码兜底保证线索不漏）。
+            // 防重复：客户已给手机号 / 回复已确认联系方式 / 本会话已追加过 → 不再要。
+            boolean userLeftPhone = PHONE_PATTERN.matcher(userMessage == null ? "" : userMessage).find();
+            if (userLeftPhone) {
+                contactRequested.add(userId);
+            }
+            if (hasPurchaseIntent(userMessage, response)
+                    && !containsContactRequest(response)
+                    && !userLeftPhone
+                    && !contactRequested.contains(userId)) {
+                response = response + "\n\n" + CONTACT_LEAD_HINT;
+                contactRequested.add(userId);
+            }
         }
         logConversation(userId, userMessage, response, idleCount, isIdle, terminated,
                 matchedSeries, classification);
@@ -260,20 +281,26 @@ public class CarSalesAgent implements ChatService {
         return entityResolver.resolve(message);
     }
 
-    /** 提取最近 10 轮对话历史文本（供 Agent 内部对话理解使用）。 */
+    /** 历史文本总长上限（字符）：多轮长回复累积会把输入上下文撑爆（回复过长根因之一）。 */
+    private static final int MAX_HISTORY_CHARS = 1500;
+
+    /** 提取最近 10 轮对话历史文本（供 Agent 内部对话理解使用），总长不超过 MAX_HISTORY_CHARS。 */
     private String buildHistoryText(String userId) {
         List<org.springframework.ai.chat.messages.Message> messages = chatMemory.get(userId);
         if (messages == null || messages.isEmpty()) return "";
-        // 取最近 10 条
+        // 取最近 10 条；从最新一条往回累计，靠近当前对话的内容优先保留，超长截断更早的
         int start = Math.max(0, messages.size() - 10);
-        StringBuilder sb = new StringBuilder();
-        for (int i = start; i < messages.size(); i++) {
+        List<String> recent = new ArrayList<>();
+        int total = 0;
+        for (int i = messages.size() - 1; i >= start && total < MAX_HISTORY_CHARS; i--) {
             String text = messages.get(i).getText();
-            if (text != null && !text.isBlank()) {
-                sb.append(text).append("\n");
-            }
+            if (text == null || text.isBlank()) continue;
+            int budget = MAX_HISTORY_CHARS - total;
+            recent.add(text.length() > budget ? text.substring(text.length() - budget) : text);
+            total += Math.min(text.length(), budget);
         }
-        return sb.toString();
+        Collections.reverse(recent);
+        return String.join("\n", recent);
     }
 
     private void logConversation(String userId, String userMessage, String response,
@@ -302,6 +329,72 @@ public class CarSalesAgent implements ChatService {
             current.highCardinalityKeyValue("langfuse.observation.metadata.level", level);
             current.highCardinalityKeyValue("langfuse.observation.metadata.idle", String.valueOf(isIdle));
         }
+    }
+
+    // ---- 价格兜底（渐进式披露第三道防线） ----
+
+    /** 手机号（客户主动留下时视为已有联系方式，线索兜底不再重复要）。 */
+    private static final java.util.regex.Pattern PHONE_PATTERN = java.util.regex.Pattern.compile("1[3-9]\\d{9}");
+
+    /** 已留过联系方式/已追加过引导的用户（本进程内），防止线索兜底每轮重复要电话。 */
+    private final java.util.Set<String> contactRequested = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 销售线索引导：客户意向明确但回复没留联系方式时，追加这句（prompt 软约束的代码兜底）。
+     *  电话 + 所在区域 = 完整销售线索（地址用于就近门店对接）。 */
+    private static final String CONTACT_LEAD_HINT =
+            "方便的话留个电话和您所在的区域（哪个城市/区），我安排专门的销售和您对接，还能帮您申请一些优惠～";
+
+    /** 回复是否已包含留联系方式引导（电话或地址；含"手机号/已记下/收到"等确认措辞）。 */
+    private static boolean containsContactRequest(String reply) {
+        if (reply == null) return false;
+        return reply.contains("电话") || reply.contains("微信") || reply.contains("联系方式")
+                || reply.contains("留个") || reply.contains("号码") || reply.contains("手机")
+                || reply.contains("记下") || reply.contains("收到")
+                || reply.contains("所在城市") || reply.contains("所在区域")
+                || reply.contains("住哪") || reply.contains("在哪边") || reply.contains("哪个区")
+                || reply.contains("常驻");
+    }
+
+    /** 是否已进入"购车意向明确"阶段（约试驾/到店/选定/问价/提车等）。 */
+    private static boolean hasPurchaseIntent(String userMessage, String reply) {
+        String m = userMessage == null ? "" : userMessage;
+        String r = reply == null ? "" : reply;
+        for (String w : new String[]{"试驾", "到店", "约", "买", "定", "看车", "优惠", "提车", "现车"}) {
+            if (m.contains(w) || r.contains(w)) return true;
+        }
+        return false;
+    }
+
+    /** 客户消息是否已进入"需要价格"的层级（与 RetrievalContextAssembler.isPriceInquiry 对齐）。 */
+    private static boolean isPriceInquiry(String userMessage) {
+        if (userMessage == null || userMessage.isBlank()) return false;
+        String m = userMessage;
+        return m.contains("多少钱") || m.contains("怎么卖") || m.contains("价格")
+                || m.contains("报价") || m.contains("优惠") || m.contains("便宜")
+                || m.contains("预算") || m.contains("砍价") || m.contains("贵")
+                || m.contains("对比") || m.contains("哪个好") || m.contains("区别")
+                || java.util.regex.Pattern.matches(".*\\d+\\s*万.*", m);
+    }
+
+    /** 回复是否包含价格数字（如 24.98万 / 46.98万）。 */
+    private static boolean containsPrice(String reply) {
+        if (reply == null) return false;
+        return java.util.regex.Pattern.compile("\\d+(\\.\\d+)?\\s*万").matcher(reply).find();
+    }
+
+    /** 客户未问价却报了价格 → 用修正指令让模型重写为"一句话概括 + 引导"。 */
+    private String rewriteWithoutPrice(ChatClient chatClient, String userId, String userMessage) {
+        String instruction = """
+                上一条回复因客户尚未问价却主动报了价格而被拦截，请重写你的回复，要求：
+                1. 只做一句话概括（如"问界M9，华为智驾加持的旗舰SUV"），最多提到 2~3 个车型；
+                2. 末尾用一句引导让客户继续（"您对哪款感兴趣？或者说说您的预算和用车需求，我帮您匹配"）；
+                3. 严禁出现任何价格数字（xx万），严禁罗列颜色、配置等明细。""";
+        return chatClient.prompt()
+                .user(userMessage)
+                .system(instruction)
+                .advisors(a -> a.param("chat_memory_conversation_id", userId))
+                .call()
+                .content();
     }
 
     private static String escapeJson(String s) {

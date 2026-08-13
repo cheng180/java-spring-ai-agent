@@ -93,7 +93,7 @@ public class ConversationGuidanceBuilder {
         switch (intent) {
             case "PRICE_CONCERN" -> prompt.append("客户主要在表达价格或预算顾虑：先接住顾虑，再最多询问一个预算或替代方向；不要重新罗列全部库存。\n");
             case "HESITATION" -> prompt.append("客户处于犹豫/观望状态：先共情，不强推，不一次倒出大量参数。\n");
-            case "PREFERENCE" -> prompt.append("客户在表达筛选偏好：围绕该偏好给少量匹配建议，最多推荐两款。\n");
+            case "PREFERENCE" -> prompt.append("客户在表达筛选偏好：围绕该偏好给少量匹配建议，最多 3 款，每款一句话概括。\n");
             default -> { }
         }
         prompt.append("这段指导只用于回答策略，不是事实来源；价格、库存、配置和门店信息必须以资料或工具为准。\n")

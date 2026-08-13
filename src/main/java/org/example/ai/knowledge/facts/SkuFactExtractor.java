@@ -96,22 +96,24 @@ public class SkuFactExtractor {
     /**
      * 自然语言渲染 —— 与现有 CarSkuVectorIndexer.render() 一致（#2 决策7）。
      * 客户会怎么问，文本就怎么写。
+     *
+     * <p>回复过长治理（2026-08-11）：文本改为「客户视角人话」——
+     * 通俗车系名（品牌+车系）开头作为展示锚点，完整款型名降级为「内部款型」
+     * 标识（模型可据此回答款型细节，但不得报给客户）；价格只保留指导价一个，
+     * 用「价格xx万」表述，不再出现指导价/全款/金融方案多个价格字段。</p>
      */
     private String render(Map<String, Object> r) {
+        String brand = str(r.get("brand_name"));
+        String series = str(r.get("series_name"));
         StringBuilder sb = new StringBuilder();
-        sb.append(str(r.get("model_name")));
-        sb.append("，").append(str(r.get("outer_color_name")));
+        sb.append("【").append(brand).append(" ").append(series).append("】");
+        sb.append("，内部款型：").append(str(r.get("model_name")));
+        sb.append("，颜色：").append(str(r.get("outer_color_name")));
         sb.append("，").append(energyText(r.get("energy_type")));
-        sb.append("，指导价").append(str(r.get("guide_price")));
-        if (r.get("sale_price") != null) {
-            sb.append(String.format("，全款销售价%.2f万",
-                    ((Number) r.get("sale_price")).doubleValue() / 1_000_000.0));
-        }
-        if (r.get("sale_price_finance") != null) {
-            sb.append(String.format("，金融方案价%.2f万",
-                    ((Number) r.get("sale_price_finance")).doubleValue() / 1_000_000.0));
-        }
-        sb.append("，").append(str(r.get("spec_name")));
+        String price = str(r.get("guide_price"));
+        sb.append("，价格").append(price.isBlank() ? "待询" : price);
+        String spec = str(r.get("spec_name"));
+        if (!spec.isBlank()) sb.append("，规格：").append(spec);
         if (isTrue(r.get("in_store_insurance"))) sb.append("，店内保险");
         if (isTrue(r.get("can_issue_vat_invoice"))) sb.append("，可开增票");
         sb.append("，车商：").append(str(r.get("owner_name")));
