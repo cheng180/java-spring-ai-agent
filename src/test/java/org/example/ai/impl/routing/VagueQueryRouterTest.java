@@ -81,7 +81,7 @@ class VagueQueryRouterTest {
 
         EntityResolver entityResolver = new EntityResolver(jdbc);
         DynamicKeywordBuilder kwBuilder = new DynamicKeywordBuilder(jdbc);
-        kwBuilder.afterPropertiesSet();
+        kwBuilder.run();
         AskCountTracker askTracker = new AskCountTracker(jdbc);
 
         // Mock VectorStore — L1 需要调用相似度检索

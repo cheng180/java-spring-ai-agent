@@ -108,7 +108,7 @@ class KnowledgeDynamicUpdateTest {
         bm25Indexer.rebuild();                          // 启动时构建 BM25 索引
         entityResolver = new EntityResolver(jdbc);      // 启动时构建别名索引
         keywordBuilder = new DynamicKeywordBuilder(jdbc);
-        keywordBuilder.afterPropertiesSet();            // 启动时构建关键词表
+        keywordBuilder.run();            // 启动时构建关键词表
 
         var refresher = new InMemoryIndexRefresher(
                 new DatabaseInitializer(jdbc), entityResolver, keywordBuilder, bm25Indexer);

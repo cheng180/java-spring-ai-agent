@@ -2,7 +2,8 @@ package org.example.ai.config;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -18,7 +19,8 @@ import java.util.stream.Collectors;
  * 同时构建关键词→车系映射，供后续阶段三 VagueQueryRouter 使用。
  */
 @Component
-public class DynamicKeywordBuilder implements InitializingBean {
+@Order(2)  // 必须晚于 DatabaseInitializer(@Order 1)：它先建 entity_mapping/car_sku 表并灌种子，本类才能读
+public class DynamicKeywordBuilder implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DynamicKeywordBuilder.class);
 
@@ -35,12 +37,12 @@ public class DynamicKeywordBuilder implements InitializingBean {
     }
 
     @Override
-    public void afterPropertiesSet() {
+    public void run(String... args) {
         rebuild();
     }
 
     /**
-     * 重建关键词表。启动时由 afterPropertiesSet 构建；车源变更广播处理后
+     * 重建关键词表。启动时由 run()（CommandLineRunner，@Order(2)，晚于 DatabaseInitializer）构建；车源变更广播处理后
      * 由更新链路（InMemoryIndexRefresher）再次调用，新车系无需重启即可进入
      * 闲聊判定与模糊路由。
      */
