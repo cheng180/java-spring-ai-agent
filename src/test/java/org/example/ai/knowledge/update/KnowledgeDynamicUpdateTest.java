@@ -107,6 +107,7 @@ class KnowledgeDynamicUpdateTest {
         bm25Indexer = new Bm25Indexer(jdbc, new PathMatchingResourcePatternResolver());
         bm25Indexer.rebuild();                          // 启动时构建 BM25 索引
         entityResolver = new EntityResolver(jdbc);      // 启动时构建别名索引
+        entityResolver.run();            // 模拟 CommandLineRunner 启动回调
         keywordBuilder = new DynamicKeywordBuilder(jdbc);
         keywordBuilder.run();            // 启动时构建关键词表
 
