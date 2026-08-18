@@ -2,6 +2,8 @@ package org.example.ai.knowledge.entity;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 
@@ -19,7 +21,8 @@ import java.util.concurrent.ConcurrentMap;
  * - 线程安全：ConcurrentMap + 不可变 ResolvedEntity record
  */
 @Component
-public class EntityResolver {
+@Order(3)  // 必须晚于 DatabaseInitializer(@Order 1)：它先建 entity_mapping 表并灌种子，本类才能读
+public class EntityResolver implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(EntityResolver.class);
 
@@ -28,8 +31,11 @@ public class EntityResolver {
 
     public EntityResolver(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    @Override
+    public void run(String... args) {
         rebuild();
-        log.info("EntityResolver 初始化完成：{} 个别名索引", aliasIndex.size());
     }
 
     /**

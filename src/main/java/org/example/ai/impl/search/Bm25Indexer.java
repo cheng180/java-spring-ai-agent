@@ -2,7 +2,8 @@ package org.example.ai.impl.search;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.InitializingBean;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.annotation.Order;
 import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.ResourcePatternResolver;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -24,7 +25,8 @@ import java.util.Map;
  * 索引内容与 Chroma 向量库保持一致，用于 BM25 + BGE-M3 混合检索。
  */
 @Component
-public class Bm25Indexer implements InitializingBean {
+@Order(4)  // 必须晚于 DatabaseInitializer(@Order 1)：它先建 car_sku 表并灌种子，本类才能读
+public class Bm25Indexer implements CommandLineRunner {
 
     private static final Logger log = LoggerFactory.getLogger(Bm25Indexer.class);
 
@@ -40,10 +42,11 @@ public class Bm25Indexer implements InitializingBean {
     }
 
     /**
-     * 启动时自动构建索引。
+     * 启动时自动构建索引（CommandLineRunner，@Order(4)，晚于 DatabaseInitializer 建表灌种子）。
+     * 车源变更广播处理后由更新链路（InMemoryIndexRefresher）再次调用 rebuild() 刷新。
      */
     @Override
-    public void afterPropertiesSet() {
+    public void run(String... args) {
         rebuild();
     }
 

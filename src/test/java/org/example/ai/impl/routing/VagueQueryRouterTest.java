@@ -80,6 +80,7 @@ class VagueQueryRouterTest {
         jdbc.update("INSERT INTO car_sku (id, brand_name, series_name) VALUES (4,'特斯拉','Model Y')");
 
         EntityResolver entityResolver = new EntityResolver(jdbc);
+        entityResolver.run();
         DynamicKeywordBuilder kwBuilder = new DynamicKeywordBuilder(jdbc);
         kwBuilder.run();
         AskCountTracker askTracker = new AskCountTracker(jdbc);

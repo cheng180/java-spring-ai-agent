@@ -60,6 +60,8 @@ class EntityResolverTest {
                 "[\"宝马X3 M\",\"X3\"]");
 
         resolver = new EntityResolver(jdbc);
+        // 生产环境由 CommandLineRunner.run() 触发；单测构造后需显式重建索引
+        resolver.rebuild();
     }
 
     @AfterEach
