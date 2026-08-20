@@ -128,7 +128,8 @@
       "Bash(git push *)",
       "Bash(tasklist //FI \"IMAGENAME eq claude.exe\" //V)",
       "Bash(wmic process *)",
-      "Bash(python *)"
+      "Bash(python *)",
+      "Bash(tasklist)"
     ]
   }
 }

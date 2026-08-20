@@ -554,20 +554,22 @@ ATEMPORAL 标记
     <mxCell id="cls-chatctrl" value="&lt;&lt;RestController&gt;&gt;
 ChatController
 ─────────────────
-+ chat(msg) : String
-+ chatStream(msg) : Flux
++ chat(message) : String (GET /chat)
++ chat(req) : Map (POST /api/chat)
++ chatStream(req) : Flux (SSE)
 + health() : Map
 ─────────────────
-- agent : CarSalesAgent" style="rounded=0;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+- chatService : ChatService" style="rounded=0;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
       <mxGeometry x="20" y="75" width="175" height="80" as="geometry" />
     </mxCell>
 
-    <!-- KnowledgeDebugController -->
+    <!-- KnowledgeController -->
     <mxCell id="cls-debugctrl" value="&lt;&lt;RestController&gt;&gt;
-KnowledgeDebugController
+KnowledgeController
 ─────────────────
-+ search(q) : List
-+ stats() : Map" style="rounded=0;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
++ search(q, topK) : Map
++ refreshSku(skuId)
++ refreshDocs()" style="rounded=0;fillColor=#E3F2FD;strokeColor=#1565C0;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
       <mxGeometry x="20" y="170" width="175" height="65" as="geometry" />
     </mxCell>
 
@@ -580,16 +582,16 @@ KnowledgeDebugController
     <mxCell id="cls-agent" value="&lt;&lt;Component&gt;&gt;
 CarSalesAgent
 ─────────────────────
-+ chat(userId,msg) : String
-+ chatStream(userId,msg) : Flux
++ chat(userId,msg,userIp) : String
++ chatStream(userId,msg,userIp) : Flux
++ chatWithHistory(convId,msg,history) : String
 + resetIdleCounter(userId)
 ─────────────────────
 - chatClient : ChatClient
 - chatMemory : ChatMemory
 - idleCounters : Map
-- CAR_KEYWORDS : Set&lt;String&gt;
-- IDLE_CHAT_LIMIT = 3
-- MEMORY_MAX_MESSAGES = 40" style="rounded=0;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+- IdleChatGate (闲聊门)
+- MEMORY_MAX_MESSAGES = 80" style="rounded=0;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
       <mxGeometry x="230" y="75" width="220" height="110" as="geometry" />
     </mxCell>
 
@@ -611,13 +613,14 @@ PromptTemplates
 CarSalesTools
 ─────────────────────
 + searchInventory(query) : String  @Tool
-+ getStoreInfo() : String  @Tool
++ getStoreInfo(city) : String  @Tool
 + getAllCars() : String  @Tool
++ getHotCars(storeId) : String  @Tool
 ─────────────────────
 - jdbc : JdbcTemplate
-- fenToWan(fen) : String
+- storeLocator / geocoder / keywordBuilder / hotCarRepo
 - energyType(type) : String" style="rounded=0;fillColor=#FFF3E0;strokeColor=#E65100;fontSize=9;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
-      <mxGeometry x="480" y="75" width="260" height="100" as="geometry" />
+      <mxGeometry x="480" y="75" width="260" height="110" as="geometry" />
     </mxCell>
 
     <!-- ============ PACKAGE: config ============ -->
@@ -702,13 +705,13 @@ CarInventory
     </mxCell>
 
     <!-- ============ PLANNED COMPONENTS ============ -->
-    <mxCell id="pkg-planned" value="规划组件 (agent/guard + knowledge/facts + agent/router + location)" style="text;fontSize=12;fontStyle=1;fillColor=#455A64;fontColor=#fff;align=center;strokeColor=#263238;rounded=1;" vertex="1" parent="1">
+    <mxCell id="pkg-planned" value="已实现补充包（facts / router / location / observability 已落地，幻觉防御 guard 未实施）" style="text;fontSize=12;fontStyle=1;fillColor=#455A64;fontColor=#fff;align=center;strokeColor=#263238;rounded=1;" vertex="1" parent="1">
       <mxGeometry x="20" y="465" width="220" height="22" as="geometry" />
     </mxCell>
 
     <!-- Planned: HallucinationDetector -->
     <mxCell id="cls-planned" value="&lt;&lt;planned&gt;&gt;
-agent.guard 幻觉防御包
+agent.guard 幻觉防御包（未实施）
 ─────────────────────
 HallucinationDetector (L2)
 DefenseChain (编排)
@@ -721,43 +724,54 @@ WeComHandoffNotifier" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fon
     </mxCell>
 
     <!-- Planned: VagueQueryRouter -->
-    <mxCell id="cls-planned2" value="&lt;&lt;planned&gt;&gt;
-agent.router 路由包
+    <mxCell id="cls-planned2" value="&lt;&lt;回退&gt;&gt;
+router 路由包（已落地为分级）
 ─────────────────────
-VagueQueryRouter
-MatchResult (枚举)
-QuestionSplitter
-AnswerMerger
-ContextCarExtractor" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
-      <mxGeometry x="530" y="445" width="220" height="80" as="geometry" />
+VagueQueryRouter (已回退/死代码)
+QueryLevelClassifier (分级)
+QueryLevel / QueryClassification
+IdleChatGate (闲聊门)
+MatchResult (枚举)" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
+      <mxGeometry x="530" y="445" width="220" height="90" as="geometry" />
     </mxCell>
 
     <!-- Planned: knowledge/facts -->
-    <mxCell id="cls-planned3" value="&lt;&lt;planned&gt;&gt;
+    <mxCell id="cls-planned3" value="已实现
 knowledge.facts 知识库包
 ─────────────────────
 AtomicFact (数据模型)
-AtomicFactExtractor (接口)
 SkuFactExtractor (SQL实现)
 LlmFactExtractor (LLM实现)
-CollectionManager
 EntityResolver
 SkuChangeListener (接口)
 SkuVectorUpdater
 SeriesParentBuilder
-AskCountTracker" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
-      <mxGeometry x="530" y="535" width="220" height="125" as="geometry" />
+AskCountTracker
+InMemoryIndexRefresher" style="rounded=0;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="530" y="545" width="220" height="130" as="geometry" />
     </mxCell>
 
     <!-- Planned: location -->
-    <mxCell id="cls-planned4" value="&lt;&lt;planned&gt;&gt;
+    <mxCell id="cls-planned4" value="已实现
 location 位置服务包
 ─────────────────────
 GeoLocator (接口)
+FixedGeoLocator / PositionStackGeoLocator
 StoreLocator (Haversine)
 HotCarRepository
-DynamicKeywordBuilder" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;dashed=1;" vertex="1" parent="1">
-      <mxGeometry x="530" y="670" width="220" height="70" as="geometry" />
+DynamicKeywordBuilder" style="rounded=0;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="530" y="685" width="220" height="90" as="geometry" />
+    </mxCell>
+
+    <!-- Planned: observability -->
+    <mxCell id="cls-planned5" value="已实现
+config.observability
+─────────────────────
+LangfuseProperties
+LangfuseObservabilityConfig
+ObservationSupport
+SyncObservationSupport" style="rounded=0;fillColor=#E8F5E9;strokeColor=#2E7D32;fontSize=8;align=left;spacingLeft=5;fontFamily=Courier New;" vertex="1" parent="1">
+      <mxGeometry x="530" y="785" width="220" height="75" as="geometry" />
     </mxCell>
 
     <!-- ============ RELATIONSHIPS ============ -->
@@ -815,7 +829,7 @@ DynamicKeywordBuilder" style="rounded=0;fillColor=#ECEFF1;strokeColor=#546E7A;fo
 DatabaseInitializer → KnowledgeBaseInitializer → CarSkuVectorIndexer" style="text;fontSize=9;align=left;" vertex="1" parent="1">
       <mxGeometry x="30" y="685" width="460" height="18" as="geometry" />
     </mxCell>
-    <mxCell id="uml-leg5" value="ChatClient链: MemoryAdvisor → RagAdvisor → Tools → LLM Call → DefenseChain" style="text;fontSize=9;align=left;" vertex="1" parent="1">
+    <mxCell id="uml-leg5" value="ChatClient链: MemoryAdvisor → Tools → LLM Call（RAG 上下文由组装器手工注入 system）" style="text;fontSize=9;align=left;" vertex="1" parent="1">
       <mxGeometry x="30" y="703" width="460" height="18" as="geometry" />
     </mxCell>
 

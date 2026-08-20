@@ -1,5 +1,10 @@
 # macan 接入 AI 项目 —— 整体方案（v0.2）
 
+> ✅ **落地情况**：本方案已实现（2026-08）。AI 项目侧为 `controller/MacanChatController.java`
+> （`POST /api/chat/messages`，无状态：每请求一次性会话灌历史 → 生成 → 清空，即下文方案 A；
+> 会话维度经 `extractMacanSession` 归入 Langfuse 同一 session 聚合）。
+> macan 侧 `AIProjectServiceImpl` 按 §5 骨架接入。下文保留为设计记录。
+
 ## 1. 一句话需求
 
 > 把 AI 项目封装成一个接口（入参 = macan 的 `List<Message>`，出参 = 回复字符串），平替掉千问 API。

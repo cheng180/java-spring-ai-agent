@@ -3,6 +3,11 @@
 > 适用项目:智能客服(Spring Boot 4 + Spring AI 2.0)
 > 资料位置:`custom-agent/customer-try/knowledge_base`(6 个 txt + 2 个 md,共约 130KB)
 > 向量库:Chroma(docker 部署)
+>
+> ⚠️ **早期参考文档**：本文写于项目早期（Chroma 映射 8000 端口、依赖 compose 自动拉起）。
+> 当前项目实际配置：Chroma 映射 **8001** 端口、`compose.yml` 单文件编排（见仓库根目录）、
+> `spring.docker.compose.enabled=false`（由 `start.sh` 显式 `docker compose up -d chroma`）。
+> 本文仍可作为 RAG 链路（解析/切分/embedding/检索）原理参考，命令与端口以仓库现状为准。
 
 ---
 
