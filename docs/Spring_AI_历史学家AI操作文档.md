@@ -1,5 +1,10 @@
 # Spring AI 历史学家 AI —— 详细操作文档
 
+> ⚠️ **与本项目无关的外部参考文档**：本文档描述的是独立项目
+> `D:\idea\project\history-expert-ai\`（历史知识专家 AI 聊天机器人）的操作方法，
+> 由腾讯云文章整理而来。与当前仓库（汽车销售智能客服）**无代码关联**，
+> 仅保留作为 Spring AI 学习参考。
+
 > 基于 [腾讯云开发者社区文章 ID 2538285](https://cloud.tencent.com/developer/article/2538285)，作者：程序员NEO（2025-07-07）
 
 ---

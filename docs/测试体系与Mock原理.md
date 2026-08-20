@@ -36,7 +36,7 @@
 class AiApplicationTests { void contextLoads() {} }
 ```
 
-**这个被禁用的测试恰好解释了其余 30+ 个测试为什么存在：为了让验证不依赖完整环境，必须把外部依赖换成可控的假货。**
+**这个被禁用的测试恰好解释了其余 20+ 个测试类（共 200+ 用例）为什么存在：为了让验证不依赖完整环境，必须把外部依赖换成可控的假货。**
 
 ### 1.2 让替换成为可能的机制：接缝（Seam）+ 依赖注入
 
@@ -122,44 +122,46 @@ class RetrievalContextAssemblerTest {
 
 ```
         ┌────────────────────┐
-        │  e2e 红绿脚本       │  scripts/diag-*.sh —— 真应用 + 真 LLM
+        │  e2e 红绿脚本       │  scripts/diag-x3-loop.sh、diag-x3-price-loop.sh —— 真应用 + 真 LLM
         ├────────────────────┤
         │  Live 实联调(门控)  │  PositionStackLiveIntegrationTest 等
         ├────────────────────┤
         │  混合组装测试       │  RetrievalContextAssemblerTest
         ├────────────────────┤
-        │  单元 + 真 SQLite   │  CarSalesToolsSearchInventoryLimitTest
+        │  单元 + 真 SQLite   │  CarSalesToolsGetStoreInfoTest 等
         ├────────────────────┤
-        │  纯单元测试         │  VagueScorerTest / Bm25IndexTest …（最多、最快）
+        │  纯单元测试         │  Bm25IndexTest / QueryLevelClassifierTest …（最多、最快）
         └────────────────────┘
 ```
 
 ### 3.1 纯单元测试：逻辑即全部依赖
 
 ```java
-// VagueScorerTest（#41）——表驱动：三层证据判定表逐行断言
-scorer = new VagueScorer(new NeedSignalDetector(), 0.7, 0.6, 0.5, 0.15, 0.05);
-//                       真实 collaborator（本身无外部依赖） + 与生产一致的阈值
+// QueryLevelClassifierTest（#24）——表驱动：判定序逐行断言
+classifier = new QueryLevelClassifier(keywordBuilder);
+assertThat(classifier.classify("有比亚迪吗", List.of())).isEqualTo(BRAND);  // 品牌词命中
+assertThat(classifier.classify("海豹", List.of(series))).isEqualTo(SERIES); // 单实体
+//                       真实 collaborator（本身无外部依赖） + 零 I/O
 ```
 
-注意注释："默认阈值：与生产配置一致（0.7 / 0.6 / 0.5，gap 0.15 / 0.05）"——**测试参数与 `application.properties` 对齐，模拟才有保真度**。毫秒级、无 I/O、数量最多。
+纯逻辑分类器与检索阈值分离：分类器本身不依赖阈值；检索阈值（父块 0.6 / 回退 0.5）是 `RetrievalContextAssembler` 的常量并与测试断言对齐——**测试参数与生产配置对齐，模拟才有保真度**。毫秒级、无 I/O、数量最多。
 
 ### 3.2 Fake 数据库：真 SQL、零外部依赖
 
 本项目数据库本来就是 SQLite（`sqlite-jdbc`），于是测试直接建**临时文件库**：
 
 ```java
-// CarSalesToolsSearchInventoryLimitTest（#38）
+// CarSalesToolsGetStoreInfoTest / SkuVectorUpdaterTest 等（SQLite 真跑）
 tmpDb = new File(System.getProperty("java.io.tmpdir"),
-        "test-inventory-limit-" + UUID.randomUUID() + ".db");
+        "test-inventory-" + UUID.randomUUID() + ".db");
 var ds = new SQLiteDataSource();
 ds.setUrl("jdbc:sqlite:" + tmpDb.getAbsolutePath());
 jdbc = new JdbcTemplate(ds);
-jdbc.execute("CREATE TABLE car_sku (...)");
-for (int i = 1; i <= 40; i++) { /* 灌 40 条同品牌车源 */ }
+jdbc.execute("CREATE TABLE store_config (...)");
+// 灌门店种子数据 → 断言 getStoreInfo 按 region/经纬度返回最近门店
 ```
 
-这是 **Fake 而非 Mock**：SQL 引擎是真的，LIMIT 行为是真的，所以 #38 的验收（"匹配 40 条只返回 30 条上限内"）才有说服力。用随机文件名 + `@AfterEach` 删除，测试间互不污染、可并行。
+这是 **Fake 而非 Mock**：SQL 引擎是真的，LIMIT 行为是真的（如 `searchInventory` 的 `SEARCH_MATCHED_LIMIT=30` / `getAllCars` 的 `ALL_CARS_LIMIT=15` 上限，由工具代码常量保证）。用随机文件名 + `@AfterEach` 删除，测试间互不污染、可并行。
 
 ### 3.3 混合组装：LLM 侧 mock、SQL 侧真实
 
@@ -189,26 +191,23 @@ mock 再像也不是真的，所以保留少量真联调，但用**环境变量�
 @EnabledIfEnvironmentVariable(named = "POSITIONSTACK_API_KEY", matches = ".+")
 class PositionStackLiveIntegrationTest { /* 只发 1 个真实请求（限速 2 req/s） */ }
 
-// ThresholdCalibrationLiveTest（#40）
-@SpringBootTest
-@EnabledIfEnvironmentVariable(named = "RUN_CALIBRATION", matches = "true")
-class ThresholdCalibrationLiveTest { /* 真 Chroma + 真 embedding 扫描黄金集 */ }
+// 其余 Live 场景（真 Chroma + 真 embedding）此前由 #40 黄金集标定工具承载，已随 #36–#43 回退移除；
+// 当前真环境验证以 e2e 红绿脚本（§3.5）与手工冒烟清单（docs/回复过长问题.md）为准
 ```
 
 | 测试 | 门控变量 | 真依赖 |
 |---|---|---|
 | `PositionStackLiveIntegrationTest` | `POSITIONSTACK_API_KEY` | positionstack HTTP |
-| `ThresholdCalibrationLiveTest` | `RUN_CALIBRATION=true` | Chroma + BGE-M3 embedding |
 
 这样 `./mvnw test` 在任何机器上都绿（门控测试被跳过），有环境的人手动开闸跑真联调——**确定性与真实性分层共存**。
 
 ### 3.5 Shell 红绿 e2e：进程级的"模拟/真实"开关
 
-`scripts/diag-vague-loop.sh`（#43）是最外层的端到端验收，三态判定：
+`scripts/diag-x3-loop.sh`（#34 反向断言，防"披露约束过度纠正"）与 `scripts/diag-x3-price-loop.sh`（正向断言，问价必须报价）是最外层的端到端验收，三态判定：
 
 ```
-RED        (exit 1) = 行为回归（引导未注入/误注入、重复问城市、画像未落库）
-GREEN      (exit 0) = 模糊场景行为符合预期
+RED        (exit 1) = 行为回归（x3-loop：未问价却报了价格；x3-price：问价却没报价格）
+GREEN      (exit 0) = 行为符合预期
 LOOP-ERROR (exit 2) = 环境问题（应用未启动、HTTP 异常），非行为判定
 ```
 
@@ -230,13 +229,13 @@ LOOP-ERROR (exit 2) = 环境问题（应用未启动、HTTP 异常），非行�
 
 ### 4.3 服务器级（mock server）
 
-`diag-vague-loop.sh` 的判定逻辑验证用的手法：**真起一个监听端口的假服务器**（如 python socket / `nc`），返回预编排响应，检验脚本在"应用返回 X"时是否输出正确 VERDICT：
+`diag-x3-loop.sh` 的判定逻辑验证用的手法：**真起一个监听端口的假服务器**（如 python socket / `nc`），返回预编排响应，检验脚本在"应用返回 X"时是否输出正确 VERDICT：
 
 ```
 mock 服务器（假装是 /api/chat）  ←——  e2e 脚本（被测对象变成脚本本身）
 ```
 
-这是"对契约另一侧整体建模"：不关心对方内部怎么算，只按契约吐字节。**#43 当前调试的 GBK 问题正出在这一层**——mock 收到 GBK 字节而非 UTF-8，根因是 Git Bash 把 argv 传给原生 `curl.exe` 时会按 GBK 重编码中文；脚本的生产路径已用 `--data-binary @文件` 规避（body 走临时文件不进 argv），验证工装也要同样处理。
+这是"对契约另一侧整体建模"：不关心对方内部怎么算，只按契约吐字节。**中文入参处理**：Git Bash 把 argv 传给原生 `curl.exe` 时会按 GBK 重编码中文；脚本的生产路径已用 `--data-binary @文件` 规避（body 走临时文件不进 argv），验证工装也要同样处理。
 
 ---
 
@@ -251,7 +250,7 @@ mock 服务器（假装是 /api/chat）  ←——  e2e 脚本（被测对象变
 
 本项目对边界的处理可以总结成三条纪律：
 
-1. **能 mock 的尽量 mock**（30+ 单元/组装测试构成日常防线，`./mvnw test` 随处可跑）；
+1. **能 mock 的尽量 mock**（20+ 单元/组装测试类、200+ 用例构成日常防线，`./mvnw test` 随处可跑）；
 2. **mock 不到的留门控 Live 出口**（环境变量开闸，不污染 CI）；
 3. **最终行为用红绿脚本对着真栈验收**（RED/GREEN 锁行为，LOOP-ERROR 把"环境问题"从"行为回归"里剥离出来，避免假阳性）。
 
@@ -261,26 +260,29 @@ mock 服务器（假装是 /api/chat）  ←——  e2e 脚本（被测对象变
 
 ```bash
 ./mvnw test                                   # 全量（门控测试自动跳过）
-./mvnw test -Dtest=VagueScorerTest            # 单测试类（开发循环常用）
+./mvnw test -Dtest=QueryLevelClassifierTest   # 单测试类（开发循环常用）
 ./mvnw test -Dtest='CarSales*'                # 通配
 
 # 开闸 Live 测试：
 POSITIONSTACK_API_KEY=<key> ./mvnw test -Dtest=PositionStackLiveIntegrationTest
-RUN_CALIBRATION=true DEEPSEEK_API_KEY=<key> SILICONFLOW_API_KEY=<key> \
-    ./mvnw test -Dtest=ThresholdCalibrationLiveTest    # 需先 docker compose 起 Chroma
 
 # e2e 红绿脚本（需真环境）：
-PORT=8080 DB_FILE=company_inventory.db bash scripts/diag-vague-loop.sh
+PORT=8080 DB_FILE=company_inventory.db bash scripts/diag-x3-loop.sh
+PORT=8080 DB_FILE=company_inventory.db bash scripts/diag-x3-price-loop.sh
 ```
 
 ## 7. 文件地图
 
 | 层 | 代表文件 | 演示的模式 |
 |---|---|---|
-| 纯单元 | `impl/routing/VagueScorerTest.java` | 表驱动 + 阈值与生产对齐 |
-| 单元+Fake DB | `impl/tool/CarSalesToolsSearchInventoryLimitTest.java` | 临时 SQLite 灌数据锁 LIMIT |
+| 纯单元 | `impl/search/Bm25IndexTest.java`、`impl/routing/QueryLevelClassifierTest.java` | 表驱动 + 判定序锁定 |
+| 单元+Fake DB | `impl/tool/CarSalesToolsGetStoreInfoTest.java`、`knowledge/update/SkuVectorUpdaterTest.java` | 临时 SQLite 灌数据跑真 SQL |
 | 函数接缝 stub | `impl/location/PositionStackGeoLocatorTest.java` | lambda 替换 HTTP |
 | 混合组装 | `impl/context/RetrievalContextAssemblerTest.java` | Mockito mock + 真 SQLite + 黄金锚点 + 行为验证 |
-| Live 门控 | `impl/location/PositionStackLiveIntegrationTest.java`、`calibration/ThresholdCalibrationLiveTest.java` | `@EnabledIfEnvironmentVariable` |
+| Live 门控 | `impl/location/PositionStackLiveIntegrationTest.java` | `@EnabledIfEnvironmentVariable` |
 | 全栈冒烟(禁用) | `AiApplicationTests.java` | 反面教材：完整上下文的代价 |
-| e2e 红绿 | `scripts/diag-vague-loop.sh` | RED/GREEN/LOOP-ERROR + mock 服务器验证 |
+| e2e 红绿 | `scripts/diag-x3-loop.sh`、`scripts/diag-x3-price-loop.sh` | RED/GREEN/LOOP-ERROR + mock 服务器验证 |
+
+> 注：本文档早期版本引用的 `VagueScorerTest` / `ThresholdCalibrationLiveTest` /
+> `CarSalesToolsSearchInventoryLimitTest` / `diag-vague-loop.sh` 属于 #36–#43 模糊路由重构，
+> 该重构已回退（见 README「已实现的阶段」），当前以表中实际文件为准。

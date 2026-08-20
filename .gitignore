@@ -49,3 +49,16 @@ META-INF/
 .env
 .env.*
 !.env.example
+
+### Agent tool state ###
+.reasonix/
+.scratch/
+.agents/
+
+### Temp / debug artifacts ###
+*_tmp.json
+probe_*.txt
+lf_*.html
+toolsnpm-cache/
+skills-lock.json
+docs/Typora_Hook_Log.txt

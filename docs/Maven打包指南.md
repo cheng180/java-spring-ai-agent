@@ -179,7 +179,7 @@ cp target/AI-0.0.1-SNAPSHOT.jar app.jar
 2. **Docker 构建拿到的还是旧 jar**：只打了 `target/` 里的 jar，没 `cp` 到根目录 `app.jar`，Dockerfile `COPY` 的是根目录那份。
 3. **`mvn` 命令找不到**：本机没装全局 mvn，用项目自带 `./mvnw`（Windows 下也可 `./mvnw.cmd`）。
 4. **deploy 报 "Distribution management undefined"**：pom 缺 `<distributionManagement>`，见第二节。
-5. **Java 版本不对**：本项目要 JDK 21，`./mvnw -v` 可看当前用的 Java。IDEA 里 `File → Project Structure → SDK` 确认。
+5. **Java 版本不对**：pom 要求 Java 17（`<java.version>17</java.version>`），本地实测 JDK 21 亦可编译（target 17）。`./mvnw -v` 可看当前用的 Java。IDEA 里 `File → Project Structure → SDK` 确认。
 6. **打包慢**：首次下载依赖较久；之后靠 `~/.m2` 缓存。阿里云镜像已配在 settings.xml，正常应该不慢。
 
 ---
